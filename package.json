@@ -1,0 +1,15 @@
+{
+  "dependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "axios": "^1.19.0",
+    "mongoose": "^9.9.3",
+    "next": "^16.3.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "technicalindicators": "^3.1.0",
+    "typescript": "^7.0.2",
+    "yahoo-finance2": "^4.0.2"
+  }
+}

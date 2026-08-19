@@ -1,0 +1,34 @@
+# Environment variables file
+.env
+.env*.local
+.env.production
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Scratch & Test Diagnostic Scripts
+test_engine.js
+test_dual_engine.js
+test_live_credentials.js
+
+# Python bytecode & cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / Editor files
+.vscode/
+.idea/
+.ds_store
+Thumbs.db
