@@ -12,8 +12,8 @@ export const revalidate = 0;
 
 // Watchlist symbols for 5-minute High-Frequency Scalper Engine
 const SCALP_WATCHLIST = [
-  { symbol: 'BTCUSDT', source: 'BINANCE' },
-  { symbol: 'GC=F', source: 'YAHOO' },
+  { symbol: 'BTC-USD', source: 'YAHOO' },
+  { symbol: 'XAUUSD=X', source: 'YAHOO' },
   { symbol: '^IXIC', source: 'YAHOO' },
   { symbol: '^DJI', source: 'YAHOO' }
 ];

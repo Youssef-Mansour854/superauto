@@ -6,7 +6,8 @@ const yahooFinance = new (YahooFinance as any)();
 export async function fetchYahoo5mKlines(symbol: string): Promise<Candle[]> {
   try {
     const period1 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 7 days back
-    const result: any = await yahooFinance.chart(symbol, {
+    const querySymbol = symbol === 'XAUUSD=X' ? 'GC=F' : symbol;
+    const result: any = await yahooFinance.chart(querySymbol, {
       period1,
       interval: '5m',
     });
@@ -45,7 +46,8 @@ export async function fetchYahooHistorical(
 ): Promise<Candle[]> {
   try {
     const period1 = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
-    const result: any = await yahooFinance.chart(symbol, {
+    const querySymbol = symbol === 'XAUUSD=X' ? 'GC=F' : symbol;
+    const result: any = await yahooFinance.chart(querySymbol, {
       period1,
       interval,
     });
