@@ -3,6 +3,7 @@ import { connectToDatabase } from '@/lib/mongodb';
 import Trade from '@/models/Trade';
 import { fetchBinanceKlines, Candle } from '@/lib/binance';
 import { fetchYahoo5mKlines } from '@/lib/yfinance';
+import { fetchTwelveData5mKlines } from '@/lib/twelvedata';
 import { calculateScalpIndicators } from '@/lib/indicators';
 import { generateGroqArabicAlert } from '@/lib/groq';
 import { sendTelegramNotification } from '@/lib/telegram';
@@ -12,14 +13,27 @@ export const revalidate = 0;
 
 // Watchlist symbols for 5-minute High-Frequency Scalper Engine
 const SCALP_WATCHLIST = [
-  { symbol: 'BTC-USD', source: 'YAHOO' },
-  { symbol: 'XAUUSD=X', source: 'YAHOO' },
+  { symbol: 'BTC/USD', source: 'TWELVEDATA' },
+  { symbol: 'XAU/USD', source: 'TWELVEDATA' },
   { symbol: '^IXIC', source: 'YAHOO' },
   { symbol: '^DJI', source: 'YAHOO' }
 ];
 
+function normalizeSymbol(symbol: string): { symbol: string; source: string } {
+  if (symbol === 'XAUUSD=X' || symbol === 'XAUUSD' || symbol === 'XAU/USD') {
+    return { symbol: 'XAU/USD', source: 'TWELVEDATA' };
+  }
+  if (symbol === 'BTC-USD' || symbol === 'BTCUSD' || symbol === 'BTC/USD') {
+    return { symbol: 'BTC/USD', source: 'TWELVEDATA' };
+  }
+  const matching = SCALP_WATCHLIST.find(i => i.symbol === symbol);
+  return matching || { symbol, source: 'YAHOO' };
+}
+
 async function fetchAsset5mCandles(symbol: string, source: string): Promise<Candle[]> {
-  if (source === 'BINANCE') {
+  if (source === 'TWELVEDATA') {
+    return await fetchTwelveData5mKlines(symbol);
+  } else if (source === 'BINANCE') {
     return await fetchBinanceKlines(symbol, '5m', 100);
   } else {
     return await fetchYahoo5mKlines(symbol);
@@ -45,7 +59,7 @@ async function runScalperEngine() {
       if (pendingTrades.length > 0) {
         logs.push(`Evaluating ${pendingTrades.length} pending scalp trade(s)...`);
         for (const trade of pendingTrades) {
-          const matchingItem = SCALP_WATCHLIST.find(i => i.symbol === trade.symbol) || { symbol: trade.symbol, source: 'YAHOO' };
+          const matchingItem = normalizeSymbol(trade.symbol);
           const candles = await fetchAsset5mCandles(matchingItem.symbol, matchingItem.source);
           if (candles && candles.length > 0) {
             const currentPrice = candles[candles.length - 1].close;
@@ -94,13 +108,17 @@ async function runScalperEngine() {
       const ind = calculateScalpIndicators(candles);
       if (!ind) continue;
 
-      const { currentClose, currentEma20, currentRsi, prevRsi, currentAtr } = ind;
+      const { currentClose, currentLow, currentEma20, currentRsi, prevRsi, currentAtr } = ind;
 
       // Aggressive Scalping Signal Rules:
-      // BUY: Close > EMA20 AND RSI > 60 AND Prev RSI < 60
+      // BUY: Close >= EMA20 AND RSI <= 70 AND (RSI crosses above 55 OR pulls back to touch EMA20)
       // SELL: Close < EMA20 AND RSI < 40 AND Prev RSI > 40
       let signalType: 'BUY' | 'SELL' | null = null;
-      if (currentClose > currentEma20 && currentRsi > 60 && prevRsi < 60) {
+
+      const rsiCrossAbove55 = prevRsi < 55 && currentRsi >= 55;
+      const emaPullbackTouch = currentLow <= currentEma20;
+
+      if (currentClose >= currentEma20 && currentRsi <= 70 && (rsiCrossAbove55 || emaPullbackTouch)) {
         signalType = 'BUY';
       } else if (currentClose < currentEma20 && currentRsi < 40 && prevRsi > 40) {
         signalType = 'SELL';

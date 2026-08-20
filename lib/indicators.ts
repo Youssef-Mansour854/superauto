@@ -8,6 +8,8 @@ export interface IndicatorResults {
   atr14: number[];
   currentClose: number;
   prevClose: number;
+  currentLow: number;
+  currentHigh: number;
   currentEma20: number;
   currentRsi: number;
   prevRsi: number;
@@ -35,6 +37,8 @@ export function calculateScalpIndicators(candles: Candle[]): IndicatorResults | 
 
   const currentClose = closes[closes.length - 1];
   const prevClose = closes[closes.length - 2];
+  const currentLow = lows[lows.length - 1];
+  const currentHigh = highs[highs.length - 1];
 
   const currentEma20 = ema20[ema20.length - 1];
   const currentRsi = rsi14[rsi14.length - 1];
@@ -48,6 +52,8 @@ export function calculateScalpIndicators(candles: Candle[]): IndicatorResults | 
     atr14,
     currentClose,
     prevClose,
+    currentLow,
+    currentHigh,
     currentEma20,
     currentRsi,
     prevRsi,
