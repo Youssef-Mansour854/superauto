@@ -8,6 +8,8 @@ export interface GroqSignalData {
   tp: number;
   rsi: number;
   ema20: number;
+  ema200?: number;
+  atr?: number;
 }
 
 export interface GroqSwingData {
@@ -28,8 +30,8 @@ export async function generateGroqArabicAlert(data: GroqSignalData): Promise<str
   const apiKey = process.env.GROQ_API_KEY;
 
   const defaultFallback = data.action === 'BUY'
-    ? `🚨 **صفقة سكالبينج سريعة (شراء) 🔥**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${data.entryPrice.toFixed(2)}\nهدف أرباح (TP): $${data.tp.toFixed(2)}\nوقف خسارة (SL): $${data.sl.toFixed(2)}\nمؤشر RSI: ${data.rsi.toFixed(1)} | EMA20: $${data.ema20.toFixed(2)}\nفرصة صعودية قوية جداً الآن!`
-    : `🚨 **صفقة سكالبينج سريعة (بيع) 📉**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${data.entryPrice.toFixed(2)}\nهدف أرباح (TP): $${data.tp.toFixed(2)}\nوقف خسارة (SL): $${data.sl.toFixed(2)}\nمؤشر RSI: ${data.rsi.toFixed(1)} | EMA20: $${data.ema20.toFixed(2)}\nفرصة هبوط وسكالبينج حاسمة!`;
+    ? `🚨 **صفقة سكالبينج سريعة (شراء) 🔥**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${data.entryPrice.toFixed(2)}\nهدف أرباح (TP - ATR 3x): $${data.tp.toFixed(2)}\nوقف خسارة (SL - ATR 1.5x): $${data.sl.toFixed(2)}\nمؤشر RSI: ${data.rsi.toFixed(1)} | EMA20: $${data.ema20.toFixed(2)}${data.ema200 ? ` | EMA200: $${data.ema200.toFixed(2)}` : ''}\nفرصة صعودية قوية مع الاتجاه العام!`
+    : `🚨 **صفقة سكالبينج سريعة (بيع) 📉**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${data.entryPrice.toFixed(2)}\nهدف أرباح (TP - ATR 3x): $${data.tp.toFixed(2)}\nوقف خسارة (SL - ATR 1.5x): $${data.sl.toFixed(2)}\nمؤشر RSI: ${data.rsi.toFixed(1)} | EMA20: $${data.ema20.toFixed(2)}${data.ema200 ? ` | EMA200: $${data.ema200.toFixed(2)}` : ''}\nفرصة هبوط قوية مع الاتجاه العام!`;
 
   if (!apiKey || apiKey.includes('your_groq_api_key')) {
     return defaultFallback;
@@ -42,11 +44,11 @@ export async function generateGroqArabicAlert(data: GroqSignalData): Promise<str
 - العملة/الأصل: ${data.symbol}
 - نوع الصفقة: ${data.action === 'BUY' ? 'شراء (BUY)' : 'بيع (SELL)'}
 - سعر الدخول الحالي: $${data.entryPrice.toFixed(2)}
-- Stop Loss (وقف الخسارة): $${data.sl.toFixed(2)}
-- Take Profit (هدف الأرباح): $${data.tp.toFixed(2)}
+- Stop Loss (وقف الخسارة - 1.5x ATR): $${data.sl.toFixed(2)}
+- Take Profit (هدف الأرباح - 3.0x ATR): $${data.tp.toFixed(2)}
 - مؤشر RSI (14): ${data.rsi.toFixed(2)}
 - مؤشر EMA (20): $${data.ema20.toFixed(2)}
-
+${data.ema200 ? `- مؤشر EMA (200): $${data.ema200.toFixed(2)}\n` : ''}${data.atr ? `- مؤشر ATR (14): $${data.atr.toFixed(2)}\n` : ''}
 اجعل التنبيه مركزاً وقصيراً وحماسياً ويشجع على التنفيذ السريع ويوضح المستويات المالية بوضوح.
 `;
 

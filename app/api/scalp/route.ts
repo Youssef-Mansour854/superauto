@@ -32,9 +32,9 @@ function normalizeSymbol(symbol: string): { symbol: string; source: string } {
 
 async function fetchAsset5mCandles(symbol: string, source: string): Promise<Candle[]> {
   if (source === 'TWELVEDATA') {
-    return await fetchTwelveData5mKlines(symbol);
+    return await fetchTwelveData5mKlines(symbol, '5min', 250);
   } else if (source === 'BINANCE') {
-    return await fetchBinanceKlines(symbol, '5m', 100);
+    return await fetchBinanceKlines(symbol, '5m', 250);
   } else {
     return await fetchYahoo5mKlines(symbol);
   }
@@ -100,38 +100,48 @@ async function runScalperEngine() {
       logs.push(`Processing 5m candles for ${symbol} via ${source}...`);
       const candles = await fetchAsset5mCandles(symbol, source);
 
-      if (!candles || candles.length < 30) {
-        logs.push(`Insufficient candle data for ${symbol}. Skipping.`);
+      if (!candles || candles.length < 200) {
+        logs.push(`Insufficient candle data for ${symbol} (minimum 200 required for EMA200). Skipping.`);
         continue;
       }
 
       const ind = calculateScalpIndicators(candles);
       if (!ind) continue;
 
-      const { currentClose, currentLow, currentEma20, currentRsi, prevRsi, currentAtr } = ind;
+      const { currentClose, currentEma20, currentEma200, currentRsi, currentAtr } = ind;
 
-      // Aggressive Scalping Signal Rules:
-      // BUY: Close >= EMA20 AND RSI <= 70 AND (RSI crosses above 55 OR pulls back to touch EMA20)
-      // SELL: Close < EMA20 AND RSI < 40 AND Prev RSI > 40
+      // Trend-Filtered Dynamic Momentum Strategy Rules:
+      // Trend Direction Filter (The Shield):
+      // - BUY: currentClose > currentEma200 AND currentClose > currentEma20
+      // - SELL: currentClose < currentEma200 AND currentClose < currentEma20
+      // Healthy Momentum Zone (The Trigger):
+      // - BUY: currentRsi >= 50 && currentRsi <= 68
+      // - SELL: currentRsi <= 50 && currentRsi >= 32
+
       let signalType: 'BUY' | 'SELL' | null = null;
 
-      const rsiCrossAbove55 = prevRsi < 55 && currentRsi >= 55;
-      const emaPullbackTouch = currentLow <= currentEma20;
+      const isBuyTrend = currentClose > currentEma200 && currentClose > currentEma20;
+      const isBuyMomentum = currentRsi >= 50 && currentRsi <= 68;
 
-      if (currentClose >= currentEma20 && currentRsi <= 70 && (rsiCrossAbove55 || emaPullbackTouch)) {
+      const isSellTrend = currentClose < currentEma200 && currentClose < currentEma20;
+      const isSellMomentum = currentRsi <= 50 && currentRsi >= 32;
+
+      if (isBuyTrend && isBuyMomentum) {
         signalType = 'BUY';
-      } else if (currentClose < currentEma20 && currentRsi < 40 && prevRsi > 40) {
+      } else if (isSellTrend && isSellMomentum) {
         signalType = 'SELL';
       }
 
       if (!signalType) {
-        results.push({ symbol, signalTriggered: false, close: currentClose, rsi: currentRsi, ema20: currentEma20 });
+        results.push({ symbol, signalTriggered: false, close: currentClose, rsi: currentRsi, ema20: currentEma20, ema200: currentEma200, atr: currentAtr });
         continue;
       }
 
       logs.push(`🚨 ${signalType} Scalp Signal Triggered for ${symbol}!`);
 
-      // Calculate Dynamic SL & TP (1.5x ATR SL, 3.0x ATR TP)
+      // Dynamic Risk Management (ATR-based SL & TP)
+      // BUY: SL = entryPrice - (ATR * 1.5), TP = entryPrice + (ATR * 3.0)
+      // SELL: SL = entryPrice + (ATR * 1.5), TP = entryPrice - (ATR * 3.0)
       const sl = signalType === 'BUY'
         ? parseFloat((currentClose - (currentAtr * 1.5)).toFixed(2))
         : parseFloat((currentClose + (currentAtr * 1.5)).toFixed(2));
@@ -147,7 +157,9 @@ async function runScalperEngine() {
         sl,
         tp,
         rsi: parseFloat(currentRsi.toFixed(2)),
-        ema20: parseFloat(currentEma20.toFixed(2))
+        ema20: parseFloat(currentEma20.toFixed(2)),
+        ema200: parseFloat(currentEma200.toFixed(2)),
+        atr: parseFloat(currentAtr.toFixed(2))
       };
 
       // Generate Egyptian Arabic AI Alert via Groq
@@ -170,7 +182,7 @@ async function runScalperEngine() {
       }
 
       // Send Telegram Alert
-      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج:**\n- الأصل: ${symbol}\n- السعر: $${currentClose}\n- SL: $${sl} | TP: $${tp}\n- RSI: ${signalDetails.rsi} | EMA20: $${signalDetails.ema20}`;
+      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- السعر: $${currentClose}\n- SL (1.5x ATR): $${sl} | TP (3.0x ATR): $${tp}\n- ATR (14): $${signalDetails.atr}\n- RSI (14): ${signalDetails.rsi} | EMA20: $${signalDetails.ema20} | EMA200: $${signalDetails.ema200}`;
       await sendTelegramNotification(telegramMsg);
 
       results.push({ symbol, signalTriggered: true, signal: signalDetails, groqAnalysis });
