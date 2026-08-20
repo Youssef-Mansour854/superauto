@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { SMA, MACD } from 'technicalindicators';
 import { connectToDatabase } from '@/lib/mongodb';
 import Trade from '@/models/Trade';
+import TradeHistory from '@/models/TradeHistory';
 import { fetchYahooHistorical, fetchStockNewsHeadlines } from '@/lib/yfinance';
 import { generateGroqSwingAnalysis } from '@/lib/groq';
 import { sendTelegramNotification } from '@/lib/telegram';
@@ -25,6 +26,7 @@ async function runStockSwingEngine() {
   }
 
   // 1. Evaluate Pending Swing Trades in Database
+  // Strictly query active 'ALERT_SENT' trades so archived trades are never re-evaluated
   if (dbConnected) {
     try {
       const pendingTrades = await Trade.find({ status: 'ALERT_SENT', tradeType: 'SWING' });
@@ -45,9 +47,34 @@ async function runStockSwingEngine() {
             }
 
             if (newStatus) {
-              trade.status = newStatus;
+              const closedAt = new Date();
+
+              // Move trade to TradeHistory archive collection for ML/AI retention
+              await TradeHistory.create({
+                tradeId: trade._id.toString(),
+                symbol: trade.symbol,
+                action: trade.action,
+                tradeType: trade.tradeType,
+                entryPrice: trade.entryPrice,
+                exitPrice: currentPrice,
+                sl: trade.sl,
+                tp: trade.tp,
+                status: newStatus,
+                sma50: trade.sma50,
+                macd: trade.macd,
+                newsHeadlines: trade.newsHeadlines,
+                groqAnalysis: trade.groqAnalysis,
+                entryTimestamp: trade.timestamp,
+                closedAt
+              });
+
+              // Update active trade status to ARCHIVED so it's removed from pending list
+              trade.status = 'ARCHIVED';
+              trade.exitPrice = currentPrice;
+              trade.closedAt = closedAt;
               await trade.save();
-              logs.push(`Swing trade ${trade._id} (${trade.symbol}) updated to ${newStatus}`);
+
+              logs.push(`Swing trade ${trade._id} (${trade.symbol}) archived with result ${newStatus}`);
 
               const outcomeText = newStatus === 'WIN'
                 ? `🎉 **تم كسب صفقة الاستثمار/السوينغ (WIN)!** 📈\nالسهم: ${trade.symbol}\nسعر الخروج: $${currentPrice}`

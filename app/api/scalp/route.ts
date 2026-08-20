@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { connectToDatabase } from '@/lib/mongodb';
 import Trade from '@/models/Trade';
+import TradeHistory from '@/models/TradeHistory';
 import { fetchBinanceKlines, Candle } from '@/lib/binance';
 import { fetchYahoo5mKlines } from '@/lib/yfinance';
 import { fetchTwelveData5mKlines } from '@/lib/twelvedata';
@@ -53,6 +54,7 @@ async function runScalperEngine() {
   }
 
   // 1. Evaluate Pending Trades in Database (tradeType: 'SCALP')
+  // Strictly query active 'ALERT_SENT' trades so archived trades are never re-evaluated
   if (dbConnected) {
     try {
       const pendingTrades = await Trade.find({ status: 'ALERT_SENT', tradeType: 'SCALP' });
@@ -74,9 +76,40 @@ async function runScalperEngine() {
             }
 
             if (newStatus) {
-              trade.status = newStatus;
+              const closedAt = new Date();
+              const indExit = candles.length >= 200 ? calculateScalpIndicators(candles) : null;
+
+              // Move trade to TradeHistory archive collection for ML/AI retention
+              await TradeHistory.create({
+                tradeId: trade._id.toString(),
+                symbol: trade.symbol,
+                action: trade.action,
+                tradeType: trade.tradeType,
+                entryPrice: trade.entryPrice,
+                exitPrice: currentPrice,
+                sl: trade.sl,
+                tp: trade.tp,
+                status: newStatus,
+                rsi: trade.rsi,
+                ema20: trade.ema20,
+                ema200: trade.ema200,
+                atr: trade.atr,
+                exitRsi: indExit ? parseFloat(indExit.currentRsi.toFixed(2)) : undefined,
+                exitEma20: indExit ? parseFloat(indExit.currentEma20.toFixed(2)) : undefined,
+                exitEma200: indExit ? parseFloat(indExit.currentEma200.toFixed(2)) : undefined,
+                exitAtr: indExit ? parseFloat(indExit.currentAtr.toFixed(2)) : undefined,
+                groqAnalysis: trade.groqAnalysis,
+                entryTimestamp: trade.timestamp,
+                closedAt
+              });
+
+              // Update active trade status to ARCHIVED so it's removed from pending list
+              trade.status = 'ARCHIVED';
+              trade.exitPrice = currentPrice;
+              trade.closedAt = closedAt;
               await trade.save();
-              logs.push(`Scalp trade ${trade._id} (${trade.symbol}) updated to ${newStatus}`);
+
+              logs.push(`Scalp trade ${trade._id} (${trade.symbol}) archived with result ${newStatus}`);
 
               const outcomeText = newStatus === 'WIN'
                 ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${currentPrice}`
