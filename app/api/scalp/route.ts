@@ -108,23 +108,23 @@ async function runScalperEngine() {
       const ind = calculateScalpIndicators(candles);
       if (!ind) continue;
 
-      const { currentClose, currentEma20, currentEma200, currentRsi, currentAtr } = ind;
+      const { currentClose, currentEma20, currentEma200, currentRsi, prevRsi, currentAtr } = ind;
 
       // Trend-Filtered Dynamic Momentum Strategy Rules:
       // Trend Direction Filter (The Shield):
       // - BUY: currentClose > currentEma200 AND currentClose > currentEma20
       // - SELL: currentClose < currentEma200 AND currentClose < currentEma20
-      // Healthy Momentum Zone (The Trigger):
-      // - BUY: currentRsi >= 50 && currentRsi <= 68
-      // - SELL: currentRsi <= 50 && currentRsi >= 32
+      // Healthy Momentum Zone (The Trigger - Crossover Event):
+      // - BUY: prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68
+      // - SELL: prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32
 
       let signalType: 'BUY' | 'SELL' | null = null;
 
       const isBuyTrend = currentClose > currentEma200 && currentClose > currentEma20;
-      const isBuyMomentum = currentRsi >= 50 && currentRsi <= 68;
+      const isBuyMomentum = prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68;
 
       const isSellTrend = currentClose < currentEma200 && currentClose < currentEma20;
-      const isSellMomentum = currentRsi <= 50 && currentRsi >= 32;
+      const isSellMomentum = prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32;
 
       if (isBuyTrend && isBuyMomentum) {
         signalType = 'BUY';
