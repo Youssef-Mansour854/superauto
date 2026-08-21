@@ -1,18 +1,27 @@
 import axios from 'axios';
 import { Candle } from './binance';
 
+export function normalizeTwelveDataSymbol(symbol: string): string {
+  if (symbol === '^IXIC' || symbol === 'IXIC') return 'IXIC';
+  if (symbol === '^DJI' || symbol === 'DJI') return 'DJI';
+  if (symbol === 'XAUUSD=X' || symbol === 'XAUUSD') return 'XAU/USD';
+  if (symbol === 'BTC-USD' || symbol === 'BTCUSD') return 'BTC/USD';
+  return symbol;
+}
+
 export async function fetchTwelveData5mKlines(
   symbol: string = 'XAU/USD',
   interval: string = '5min',
   outputsize: number = 100
 ): Promise<Candle[]> {
   try {
+    const apiSymbol = normalizeTwelveDataSymbol(symbol);
     const apiKey = process.env.TWELVEDATA_API_KEY || '';
     const url = `https://api.twelvedata.com/time_series`;
 
     const response = await axios.get(url, {
       params: {
-        symbol,
+        symbol: apiSymbol,
         interval,
         outputsize,
         apikey: apiKey,
@@ -33,7 +42,7 @@ export async function fetchTwelveData5mKlines(
     }
 
     // Support single symbol or nested symbol object in response
-    const symbolData = data.values ? data : data[symbol];
+    const symbolData = data.values ? data : (data[apiSymbol] || data[symbol]);
 
     if (!symbolData || !Array.isArray(symbolData.values) || symbolData.values.length === 0) {
       console.warn(`No candle values found in Twelve Data response for '${symbol}'.`);

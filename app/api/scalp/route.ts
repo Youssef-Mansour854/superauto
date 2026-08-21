@@ -3,7 +3,6 @@ import { connectToDatabase } from '@/lib/mongodb';
 import Trade from '@/models/Trade';
 import TradeHistory from '@/models/TradeHistory';
 import { fetchBinanceKlines, Candle } from '@/lib/binance';
-import { fetchYahoo5mKlines } from '@/lib/yfinance';
 import { fetchTwelveData5mKlines } from '@/lib/twelvedata';
 import { calculateScalpIndicators } from '@/lib/indicators';
 import { generateGroqArabicAlert } from '@/lib/groq';
@@ -16,8 +15,8 @@ export const revalidate = 0;
 const SCALP_WATCHLIST = [
   { symbol: 'BTC/USD', source: 'TWELVEDATA' },
   { symbol: 'XAU/USD', source: 'TWELVEDATA' },
-  { symbol: '^IXIC', source: 'YAHOO' },
-  { symbol: '^DJI', source: 'YAHOO' }
+  { symbol: 'IXIC', source: 'TWELVEDATA' },
+  { symbol: 'DJI', source: 'TWELVEDATA' }
 ];
 
 function normalizeSymbol(symbol: string): { symbol: string; source: string } {
@@ -27,18 +26,21 @@ function normalizeSymbol(symbol: string): { symbol: string; source: string } {
   if (symbol === 'BTC-USD' || symbol === 'BTCUSD' || symbol === 'BTC/USD') {
     return { symbol: 'BTC/USD', source: 'TWELVEDATA' };
   }
+  if (symbol === '^IXIC' || symbol === 'IXIC') {
+    return { symbol: 'IXIC', source: 'TWELVEDATA' };
+  }
+  if (symbol === '^DJI' || symbol === 'DJI') {
+    return { symbol: 'DJI', source: 'TWELVEDATA' };
+  }
   const matching = SCALP_WATCHLIST.find(i => i.symbol === symbol);
-  return matching || { symbol, source: 'YAHOO' };
+  return matching || { symbol, source: 'TWELVEDATA' };
 }
 
 async function fetchAsset5mCandles(symbol: string, source: string): Promise<Candle[]> {
-  if (source === 'TWELVEDATA') {
-    return await fetchTwelveData5mKlines(symbol, '5min', 250);
-  } else if (source === 'BINANCE') {
+  if (source === 'BINANCE') {
     return await fetchBinanceKlines(symbol, '5m', 250);
-  } else {
-    return await fetchYahoo5mKlines(symbol);
   }
+  return await fetchTwelveData5mKlines(symbol, '5min', 250);
 }
 
 async function runScalperEngine() {
