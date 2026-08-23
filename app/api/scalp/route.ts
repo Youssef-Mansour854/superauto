@@ -47,6 +47,22 @@ async function runScalperEngine() {
   const logs: string[] = [];
   logs.push(`Starting 5m Multi-Asset Scalper Engine Cycle at ${new Date().toISOString()}`);
 
+  // Market Day Filter: Check UTC day of the week (0 = Sunday, 6 = Saturday)
+  const currentUtcDay = new Date().getUTCDay();
+  if (currentUtcDay === 0 || currentUtcDay === 6) {
+    const weekendLog = 'Weekend detected: Bot sleeping';
+    console.log(weekendLog);
+    logs.push(weekendLog);
+    return {
+      success: true,
+      engine: '5m High-Frequency Scalper',
+      message: weekendLog,
+      processedAssets: 0,
+      results: [],
+      logs
+    };
+  }
+
   let dbConnected = false;
   try {
     const db = await connectToDatabase();

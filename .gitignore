@@ -27,6 +27,9 @@ venv/
 ENV/
 env/
 
+# Build cache / TS artifacts
+*.tsbuildinfo
+
 # IDE / Editor files
 .vscode/
 .idea/
