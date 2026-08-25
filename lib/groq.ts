@@ -25,7 +25,7 @@ export interface GroqSwingData {
   newsHeadlines: string[];
 }
 
-const DEFAULT_MODEL = process.env.GROQ_MODEL || 'groq/compound-mini';
+const DEFAULT_MODEL = process.env.GROQ_MODEL || 'llama3-8b-8192';
 
 export async function generateGroqArabicAlert(data: GroqSignalData): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
