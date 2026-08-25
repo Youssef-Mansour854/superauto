@@ -94,6 +94,20 @@ async function runStockSwingEngine() {
 
   for (const symbol of SWING_STOCKS) {
     try {
+      if (dbConnected) {
+        const activeTrade = await Trade.findOne({
+          symbol: { $in: [symbol, symbol.replace('/', ''), symbol.replace('/', '-'), `^${symbol}`] },
+          status: 'ALERT_SENT'
+        });
+        if (activeTrade) {
+          const skipMsg = `Active trade exists for ${symbol}, skipping new entry evaluation.`;
+          console.log(skipMsg);
+          logs.push(skipMsg);
+          results.push({ symbol, signalTriggered: false, skipped: true, reason: skipMsg });
+          continue;
+        }
+      }
+
       logs.push(`Fetching weekly historical candles for ${symbol}...`);
       const weeklyCandles = await fetchYahooHistorical(symbol, '1wk', 730);
 

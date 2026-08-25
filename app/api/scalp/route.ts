@@ -148,6 +148,20 @@ async function runScalperEngine() {
   for (const item of SCALP_WATCHLIST) {
     const { symbol, source } = item;
     try {
+      if (dbConnected) {
+        const activeTrade = await Trade.findOne({
+          symbol: { $in: [symbol, symbol.replace('/', ''), symbol.replace('/', '-'), `^${symbol}`] },
+          status: 'ALERT_SENT'
+        });
+        if (activeTrade) {
+          const skipMsg = `Active trade exists for ${symbol}, skipping new entry evaluation.`;
+          console.log(skipMsg);
+          logs.push(skipMsg);
+          results.push({ symbol, signalTriggered: false, skipped: true, reason: skipMsg });
+          continue;
+        }
+      }
+
       logs.push(`Processing 5m candles for ${symbol} via ${source}...`);
       const candles = await fetchAsset5mCandles(symbol, source);
 
