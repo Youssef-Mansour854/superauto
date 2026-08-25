@@ -9,6 +9,7 @@ export interface ITrade extends Document {
   tp: number;
   rsi?: number;
   ema20?: number;
+  ema100?: number;
   ema200?: number;
   atr?: number;
   sma50?: number;
@@ -31,6 +32,7 @@ const TradeSchema: Schema = new Schema<ITrade>({
   tp: { type: Number, required: true },
   rsi: { type: Number },
   ema20: { type: Number },
+  ema100: { type: Number },
   ema200: { type: Number },
   atr: { type: Number },
   sma50: { type: Number },

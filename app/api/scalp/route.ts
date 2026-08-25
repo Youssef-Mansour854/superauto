@@ -15,6 +15,8 @@ export const revalidate = 0;
 const SCALP_WATCHLIST = [
   { symbol: 'BTC/USD', source: 'TWELVEDATA' },
   { symbol: 'XAU/USD', source: 'TWELVEDATA' },
+  { symbol: 'XAG/USD', source: 'TWELVEDATA' },
+  { symbol: 'EUR/USD', source: 'TWELVEDATA' },
   { symbol: 'IXIC', source: 'TWELVEDATA' },
   { symbol: 'DJI', source: 'TWELVEDATA' }
 ];
@@ -22,6 +24,12 @@ const SCALP_WATCHLIST = [
 function normalizeSymbol(symbol: string): { symbol: string; source: string } {
   if (symbol === 'XAUUSD=X' || symbol === 'XAUUSD' || symbol === 'XAU/USD') {
     return { symbol: 'XAU/USD', source: 'TWELVEDATA' };
+  }
+  if (symbol === 'XAGUSD=X' || symbol === 'XAGUSD' || symbol === 'XAG/USD') {
+    return { symbol: 'XAG/USD', source: 'TWELVEDATA' };
+  }
+  if (symbol === 'EURUSD=X' || symbol === 'EURUSD' || symbol === 'EUR/USD') {
+    return { symbol: 'EUR/USD', source: 'TWELVEDATA' };
   }
   if (symbol === 'BTC-USD' || symbol === 'BTCUSD' || symbol === 'BTC/USD') {
     return { symbol: 'BTC/USD', source: 'TWELVEDATA' };
@@ -95,7 +103,7 @@ async function runScalperEngine() {
 
             if (newStatus) {
               const closedAt = new Date();
-              const indExit = candles.length >= 200 ? calculateScalpIndicators(candles) : null;
+              const indExit = candles.length >= 100 ? calculateScalpIndicators(candles) : null;
 
               // Move trade to TradeHistory archive collection for ML/AI retention
               await TradeHistory.create({
@@ -110,11 +118,11 @@ async function runScalperEngine() {
                 status: newStatus,
                 rsi: trade.rsi,
                 ema20: trade.ema20,
-                ema200: trade.ema200,
+                ema100: trade.ema100 || trade.ema200,
                 atr: trade.atr,
                 exitRsi: indExit ? parseFloat(indExit.currentRsi.toFixed(2)) : undefined,
                 exitEma20: indExit ? parseFloat(indExit.currentEma20.toFixed(2)) : undefined,
-                exitEma200: indExit ? parseFloat(indExit.currentEma200.toFixed(2)) : undefined,
+                exitEma100: indExit ? parseFloat(indExit.currentEma100.toFixed(2)) : undefined,
                 exitAtr: indExit ? parseFloat(indExit.currentAtr.toFixed(2)) : undefined,
                 groqAnalysis: trade.groqAnalysis,
                 entryTimestamp: trade.timestamp,
@@ -172,7 +180,7 @@ async function runScalperEngine() {
 
               if (entryTime > 0 && timeElapsedMs >= 3600000) {
                 const closedAt = new Date();
-                const indExit = candles.length >= 200 ? calculateScalpIndicators(candles) : null;
+                const indExit = candles.length >= 100 ? calculateScalpIndicators(candles) : null;
                 const timeStopStatus: 'WIN' | 'LOSS' = trade.action === 'BUY'
                   ? (currentPrice >= trade.entryPrice ? 'WIN' : 'LOSS')
                   : (currentPrice <= trade.entryPrice ? 'WIN' : 'LOSS');
@@ -189,11 +197,11 @@ async function runScalperEngine() {
                   status: timeStopStatus,
                   rsi: trade.rsi,
                   ema20: trade.ema20,
-                  ema200: trade.ema200,
+                  ema100: trade.ema100 || trade.ema200,
                   atr: trade.atr,
                   exitRsi: indExit ? parseFloat(indExit.currentRsi.toFixed(2)) : undefined,
                   exitEma20: indExit ? parseFloat(indExit.currentEma20.toFixed(2)) : undefined,
-                  exitEma200: indExit ? parseFloat(indExit.currentEma200.toFixed(2)) : undefined,
+                  exitEma100: indExit ? parseFloat(indExit.currentEma100.toFixed(2)) : undefined,
                   exitAtr: indExit ? parseFloat(indExit.currentAtr.toFixed(2)) : undefined,
                   groqAnalysis: trade.groqAnalysis,
                   entryTimestamp: trade.timestamp,
@@ -242,30 +250,30 @@ async function runScalperEngine() {
       logs.push(`Processing 5m candles for ${symbol} via ${source}...`);
       const candles = await fetchAsset5mCandles(symbol, source);
 
-      if (!candles || candles.length < 200) {
-        logs.push(`Insufficient candle data for ${symbol} (minimum 200 required for EMA200). Skipping.`);
+      if (!candles || candles.length < 100) {
+        logs.push(`Insufficient candle data for ${symbol} (minimum 100 required for EMA100). Skipping.`);
         continue;
       }
 
       const ind = calculateScalpIndicators(candles);
       if (!ind) continue;
 
-      const { currentClose, currentEma20, currentEma200, currentRsi, prevRsi, currentAtr } = ind;
+      const { currentClose, currentEma20, currentEma100, currentRsi, prevRsi, currentAtr } = ind;
 
       // Trend-Filtered Dynamic Momentum Strategy Rules:
       // Trend Direction Filter (The Shield):
-      // - BUY: currentClose > currentEma200 AND currentClose > currentEma20
-      // - SELL: currentClose < currentEma200 AND currentClose < currentEma20
+      // - BUY: currentClose > currentEma100 AND currentClose > currentEma20
+      // - SELL: currentClose < currentEma100 AND currentClose < currentEma20
       // Healthy Momentum Zone (The Trigger - Crossover Event):
       // - BUY: prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68
       // - SELL: prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32
 
       let signalType: 'BUY' | 'SELL' | null = null;
 
-      const isBuyTrend = currentClose > currentEma200 && currentClose > currentEma20;
+      const isBuyTrend = currentClose > currentEma100 && currentClose > currentEma20;
       const isBuyMomentum = prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68;
 
-      const isSellTrend = currentClose < currentEma200 && currentClose < currentEma20;
+      const isSellTrend = currentClose < currentEma100 && currentClose < currentEma20;
       const isSellMomentum = prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32;
 
       if (isBuyTrend && isBuyMomentum) {
@@ -275,7 +283,7 @@ async function runScalperEngine() {
       }
 
       if (!signalType) {
-        results.push({ symbol, signalTriggered: false, close: currentClose, rsi: currentRsi, ema20: currentEma20, ema200: currentEma200, atr: currentAtr });
+        results.push({ symbol, signalTriggered: false, close: currentClose, rsi: currentRsi, ema20: currentEma20, ema100: currentEma100, atr: currentAtr });
         continue;
       }
 
@@ -300,7 +308,7 @@ async function runScalperEngine() {
         tp,
         rsi: parseFloat(currentRsi.toFixed(2)),
         ema20: parseFloat(currentEma20.toFixed(2)),
-        ema200: parseFloat(currentEma200.toFixed(2)),
+        ema100: parseFloat(currentEma100.toFixed(2)),
         atr: parseFloat(currentAtr.toFixed(2))
       };
 
@@ -324,7 +332,7 @@ async function runScalperEngine() {
       }
 
       // Send Telegram Alert
-      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- السعر: $${currentClose}\n- SL (1.5x ATR): $${sl} | TP (3.0x ATR): $${tp}\n- ATR (14): $${signalDetails.atr}\n- RSI (14): ${signalDetails.rsi} | EMA20: $${signalDetails.ema20} | EMA200: $${signalDetails.ema200}`;
+      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- السعر: $${currentClose}\n- SL (1.5x ATR): $${sl} | TP (3.0x ATR): $${tp}\n- ATR (14): $${signalDetails.atr}\n- RSI (14): ${signalDetails.rsi} | EMA20: $${signalDetails.ema20} | EMA100: $${signalDetails.ema100}`;
       await sendTelegramNotification(telegramMsg);
 
       results.push({ symbol, signalTriggered: true, signal: signalDetails, groqAnalysis });

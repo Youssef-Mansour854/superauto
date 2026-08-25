@@ -8,6 +8,7 @@ export interface GroqSignalData {
   tp: number;
   rsi: number;
   ema20: number;
+  ema100?: number;
   ema200?: number;
   atr?: number;
 }
@@ -29,9 +30,11 @@ const DEFAULT_MODEL = process.env.GROQ_MODEL || 'groq/compound-mini';
 export async function generateGroqArabicAlert(data: GroqSignalData): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
 
+  const ema100Val = data.ema100 !== undefined ? data.ema100 : data.ema200;
+
   const defaultFallback = data.action === 'BUY'
-    ? `🚨 **صفقة سكالبينج سريعة (شراء) 🔥**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${data.entryPrice.toFixed(2)}\nهدف أرباح (TP - ATR 3x): $${data.tp.toFixed(2)}\nوقف خسارة (SL - ATR 1.5x): $${data.sl.toFixed(2)}\nمؤشر RSI: ${data.rsi.toFixed(1)} | EMA20: $${data.ema20.toFixed(2)}${data.ema200 ? ` | EMA200: $${data.ema200.toFixed(2)}` : ''}\nفرصة صعودية قوية مع الاتجاه العام!`
-    : `🚨 **صفقة سكالبينج سريعة (بيع) 📉**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${data.entryPrice.toFixed(2)}\nهدف أرباح (TP - ATR 3x): $${data.tp.toFixed(2)}\nوقف خسارة (SL - ATR 1.5x): $${data.sl.toFixed(2)}\nمؤشر RSI: ${data.rsi.toFixed(1)} | EMA20: $${data.ema20.toFixed(2)}${data.ema200 ? ` | EMA200: $${data.ema200.toFixed(2)}` : ''}\nفرصة هبوط قوية مع الاتجاه العام!`;
+    ? `🚨 **صفقة سكالبينج سريعة (شراء) 🔥**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${data.entryPrice.toFixed(2)}\nهدف أرباح (TP - ATR 3x): $${data.tp.toFixed(2)}\nوقف خسارة (SL - ATR 1.5x): $${data.sl.toFixed(2)}\nمؤشر RSI: ${data.rsi.toFixed(1)} | EMA20: $${data.ema20.toFixed(2)}${ema100Val !== undefined ? ` | EMA100: $${ema100Val.toFixed(2)}` : ''}\nفرصة صعودية قوية مع الاتجاه العام!`
+    : `🚨 **صفقة سكالبينج سريعة (بيع) 📉**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${data.entryPrice.toFixed(2)}\nهدف أرباح (TP - ATR 3x): $${data.tp.toFixed(2)}\nوقف خسارة (SL - ATR 1.5x): $${data.sl.toFixed(2)}\nمؤشر RSI: ${data.rsi.toFixed(1)} | EMA20: $${data.ema20.toFixed(2)}${ema100Val !== undefined ? ` | EMA100: $${ema100Val.toFixed(2)}` : ''}\nفرصة هبوط قوية مع الاتجاه العام!`;
 
   if (!apiKey || apiKey.includes('your_groq_api_key')) {
     return defaultFallback;
@@ -48,7 +51,7 @@ export async function generateGroqArabicAlert(data: GroqSignalData): Promise<str
 - Take Profit (هدف الأرباح - 3.0x ATR): $${data.tp.toFixed(2)}
 - مؤشر RSI (14): ${data.rsi.toFixed(2)}
 - مؤشر EMA (20): $${data.ema20.toFixed(2)}
-${data.ema200 ? `- مؤشر EMA (200): $${data.ema200.toFixed(2)}\n` : ''}${data.atr ? `- مؤشر ATR (14): $${data.atr.toFixed(2)}\n` : ''}
+${ema100Val !== undefined ? `- مؤشر EMA (100): $${ema100Val.toFixed(2)}\n` : ''}${data.atr ? `- مؤشر ATR (14): $${data.atr.toFixed(2)}\n` : ''}
 اجعل التنبيه مركزاً وقصيراً وحماسياً ويشجع على التنفيذ السريع ويوضح المستويات المالية بوضوح.
 `;
 

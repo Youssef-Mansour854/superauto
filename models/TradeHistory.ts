@@ -12,12 +12,14 @@ export interface ITradeHistory extends Document {
   status: 'WIN' | 'LOSS';
   rsi?: number;
   ema20?: number;
+  ema100?: number;
   ema200?: number;
   atr?: number;
   sma50?: number;
   macd?: number;
   exitRsi?: number;
   exitEma20?: number;
+  exitEma100?: number;
   exitEma200?: number;
   exitAtr?: number;
   newsHeadlines?: string[];
@@ -38,12 +40,14 @@ const TradeHistorySchema: Schema = new Schema<ITradeHistory>({
   status: { type: String, enum: ['WIN', 'LOSS'], required: true, index: true },
   rsi: { type: Number },
   ema20: { type: Number },
+  ema100: { type: Number },
   ema200: { type: Number },
   atr: { type: Number },
   sma50: { type: Number },
   macd: { type: Number },
   exitRsi: { type: Number },
   exitEma20: { type: Number },
+  exitEma100: { type: Number },
   exitEma200: { type: Number },
   exitAtr: { type: Number },
   newsHeadlines: [{ type: String }],
