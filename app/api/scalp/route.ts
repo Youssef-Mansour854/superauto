@@ -133,6 +133,83 @@ async function runScalperEngine() {
                 ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${currentPrice}`
                 : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${currentPrice}`;
               await sendTelegramNotification(outcomeText);
+            } else {
+              // -------------------------------------------------------------
+              // Advanced Trade Management: Breakeven & Time Stop
+              // -------------------------------------------------------------
+
+              // 1. Breakeven Logic (Move SL to Entry Price at >= 50% TP progress)
+              if (!trade.breakevenApplied) {
+                let is50PercentReached = false;
+
+                if (trade.action === 'BUY') {
+                  const target50 = trade.entryPrice + 0.5 * (trade.tp - trade.entryPrice);
+                  if (currentPrice >= target50) {
+                    is50PercentReached = true;
+                  }
+                } else if (trade.action === 'SELL') {
+                  const target50 = trade.entryPrice - 0.5 * (trade.entryPrice - trade.tp);
+                  if (currentPrice <= target50) {
+                    is50PercentReached = true;
+                  }
+                }
+
+                if (is50PercentReached) {
+                  trade.sl = trade.entryPrice;
+                  trade.breakevenApplied = true;
+                  await trade.save();
+
+                  const breakevenMsg = `🛡️ (BREAKEVEN) Risk Free! SL moved to Entry Price for ${trade.symbol}.`;
+                  logs.push(breakevenMsg);
+                  console.log(breakevenMsg);
+                  await sendTelegramNotification(breakevenMsg);
+                }
+              }
+
+              // 2. Time Stop Logic (Close at market price if elapsed time >= 60 minutes)
+              const entryTime = trade.timestamp ? new Date(trade.timestamp).getTime() : 0;
+              const timeElapsedMs = Date.now() - entryTime;
+
+              if (entryTime > 0 && timeElapsedMs >= 3600000) {
+                const closedAt = new Date();
+                const indExit = candles.length >= 200 ? calculateScalpIndicators(candles) : null;
+                const timeStopStatus: 'WIN' | 'LOSS' = trade.action === 'BUY'
+                  ? (currentPrice >= trade.entryPrice ? 'WIN' : 'LOSS')
+                  : (currentPrice <= trade.entryPrice ? 'WIN' : 'LOSS');
+
+                await TradeHistory.create({
+                  tradeId: trade._id.toString(),
+                  symbol: trade.symbol,
+                  action: trade.action,
+                  tradeType: trade.tradeType,
+                  entryPrice: trade.entryPrice,
+                  exitPrice: currentPrice,
+                  sl: trade.sl,
+                  tp: trade.tp,
+                  status: timeStopStatus,
+                  rsi: trade.rsi,
+                  ema20: trade.ema20,
+                  ema200: trade.ema200,
+                  atr: trade.atr,
+                  exitRsi: indExit ? parseFloat(indExit.currentRsi.toFixed(2)) : undefined,
+                  exitEma20: indExit ? parseFloat(indExit.currentEma20.toFixed(2)) : undefined,
+                  exitEma200: indExit ? parseFloat(indExit.currentEma200.toFixed(2)) : undefined,
+                  exitAtr: indExit ? parseFloat(indExit.currentAtr.toFixed(2)) : undefined,
+                  groqAnalysis: trade.groqAnalysis,
+                  entryTimestamp: trade.timestamp,
+                  closedAt
+                });
+
+                trade.status = 'ARCHIVED';
+                trade.exitPrice = currentPrice;
+                trade.closedAt = closedAt;
+                await trade.save();
+
+                const timeStopMsg = `⏱️ (TIME STOP) Trade closed at market price to free capital for ${trade.symbol}.`;
+                logs.push(timeStopMsg);
+                console.log(timeStopMsg);
+                await sendTelegramNotification(timeStopMsg);
+              }
             }
           }
         }

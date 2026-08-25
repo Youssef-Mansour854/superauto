@@ -17,6 +17,7 @@ export interface ITrade extends Document {
   newsHeadlines?: string[];
   groqAnalysis?: string;
   status: 'ALERT_SENT' | 'WIN' | 'LOSS' | 'ARCHIVED';
+  breakevenApplied?: boolean;
   closedAt?: Date;
   timestamp: Date;
 }
@@ -38,6 +39,7 @@ const TradeSchema: Schema = new Schema<ITrade>({
   newsHeadlines: [{ type: String }],
   groqAnalysis: { type: String },
   status: { type: String, enum: ['ALERT_SENT', 'WIN', 'LOSS', 'ARCHIVED'], default: 'ALERT_SENT', index: true },
+  breakevenApplied: { type: Boolean, default: false },
   closedAt: { type: Date },
   timestamp: { type: Date, default: Date.now }
 });
