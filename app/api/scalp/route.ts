@@ -13,32 +13,20 @@ export const revalidate = 0;
 
 // Watchlist symbols for 5-minute High-Frequency Scalper Engine
 const SCALP_WATCHLIST = [
-  { symbol: 'BTC/USD', source: 'TWELVEDATA' },
   { symbol: 'XAU/USD', source: 'TWELVEDATA' },
-  { symbol: 'XAG/USD', source: 'TWELVEDATA' },
   { symbol: 'EUR/USD', source: 'TWELVEDATA' },
-  { symbol: 'IXIC', source: 'TWELVEDATA' },
-  { symbol: 'DJI', source: 'TWELVEDATA' }
+  { symbol: '^IXIC', source: 'TWELVEDATA' }
 ];
 
 function normalizeSymbol(symbol: string): { symbol: string; source: string } {
   if (symbol === 'XAUUSD=X' || symbol === 'XAUUSD' || symbol === 'XAU/USD') {
     return { symbol: 'XAU/USD', source: 'TWELVEDATA' };
   }
-  if (symbol === 'XAGUSD=X' || symbol === 'XAGUSD' || symbol === 'XAG/USD') {
-    return { symbol: 'XAG/USD', source: 'TWELVEDATA' };
-  }
   if (symbol === 'EURUSD=X' || symbol === 'EURUSD' || symbol === 'EUR/USD') {
     return { symbol: 'EUR/USD', source: 'TWELVEDATA' };
   }
-  if (symbol === 'BTC-USD' || symbol === 'BTCUSD' || symbol === 'BTC/USD') {
-    return { symbol: 'BTC/USD', source: 'TWELVEDATA' };
-  }
   if (symbol === '^IXIC' || symbol === 'IXIC') {
-    return { symbol: 'IXIC', source: 'TWELVEDATA' };
-  }
-  if (symbol === '^DJI' || symbol === 'DJI') {
-    return { symbol: 'DJI', source: 'TWELVEDATA' };
+    return { symbol: '^IXIC', source: 'TWELVEDATA' };
   }
   const matching = SCALP_WATCHLIST.find(i => i.symbol === symbol);
   return matching || { symbol, source: 'TWELVEDATA' };
@@ -227,23 +215,20 @@ async function runScalperEngine() {
     }
   }
 
-  // 2. Iterate through Scalp Watchlist
-  const results = [];
-
-  for (const item of SCALP_WATCHLIST) {
+  // 2. Iterate through Scalp Watchlist Concurrently (Promise.allSettled)
+  const assetPromises = SCALP_WATCHLIST.map(async (item) => {
     const { symbol, source } = item;
     try {
       if (dbConnected) {
         const activeTrade = await Trade.findOne({
-          symbol: { $in: [symbol, symbol.replace('/', ''), symbol.replace('/', '-'), `^${symbol}`] },
+          symbol: { $in: [symbol, symbol.replace('/', ''), symbol.replace('/', '-'), `^${symbol}`, symbol.replace('^', '')] },
           status: 'ALERT_SENT'
         });
         if (activeTrade) {
           const skipMsg = `Active trade exists for ${symbol}, skipping new entry evaluation.`;
           console.log(skipMsg);
           logs.push(skipMsg);
-          results.push({ symbol, signalTriggered: false, skipped: true, reason: skipMsg });
-          continue;
+          return { symbol, signalTriggered: false, skipped: true, reason: skipMsg };
         }
       }
 
@@ -251,12 +236,17 @@ async function runScalperEngine() {
       const candles = await fetchAsset5mCandles(symbol, source);
 
       if (!candles || candles.length < 100) {
-        logs.push(`Insufficient candle data for ${symbol} (minimum 100 required for EMA100). Skipping.`);
-        continue;
+        const msg = `Insufficient candle data for ${symbol} (minimum 100 required for EMA100). Skipping.`;
+        logs.push(msg);
+        return { symbol, signalTriggered: false, skipped: true, reason: msg };
       }
 
       const ind = calculateScalpIndicators(candles);
-      if (!ind) continue;
+      if (!ind) {
+        const msg = `Failed to calculate indicators for ${symbol}. Skipping.`;
+        logs.push(msg);
+        return { symbol, signalTriggered: false, skipped: true, reason: msg };
+      }
 
       const { currentClose, currentEma20, currentEma100, currentRsi, prevRsi, currentAtr } = ind;
 
@@ -283,8 +273,7 @@ async function runScalperEngine() {
       }
 
       if (!signalType) {
-        results.push({ symbol, signalTriggered: false, close: currentClose, rsi: currentRsi, ema20: currentEma20, ema100: currentEma100, atr: currentAtr });
-        continue;
+        return { symbol, signalTriggered: false, close: currentClose, rsi: currentRsi, ema20: currentEma20, ema100: currentEma100, atr: currentAtr };
       }
 
       logs.push(`🚨 ${signalType} Scalp Signal Triggered for ${symbol}!`);
@@ -335,12 +324,27 @@ async function runScalperEngine() {
       const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- السعر: $${formatPrice(currentClose)}\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (3.0x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
       await sendTelegramNotification(telegramMsg);
 
-      results.push({ symbol, signalTriggered: true, signal: signalDetails, groqAnalysis });
+      return { symbol, signalTriggered: true, signal: signalDetails, groqAnalysis };
 
     } catch (assetErr: any) {
-      logs.push(`Error processing scalp asset ${symbol}: ${assetErr?.message || assetErr}`);
+      const errMsg = `Error processing scalp asset ${symbol}: ${assetErr?.message || assetErr}`;
+      logs.push(errMsg);
+      return { symbol, signalTriggered: false, error: errMsg };
     }
-  }
+  });
+
+  const settledResults = await Promise.allSettled(assetPromises);
+
+  const results = settledResults.map((res, index) => {
+    if (res.status === 'fulfilled') {
+      return res.value;
+    } else {
+      const symbol = SCALP_WATCHLIST[index]?.symbol || 'UNKNOWN';
+      const errMsg = `Unhandled rejection for ${symbol}: ${res.reason?.message || res.reason}`;
+      logs.push(errMsg);
+      return { symbol, signalTriggered: false, error: errMsg };
+    }
+  });
 
   return {
     success: true,
