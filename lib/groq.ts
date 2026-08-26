@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { formatPrice } from './indicators';
 
 export interface GroqSignalData {
   symbol: string;
@@ -33,8 +34,8 @@ export async function generateGroqArabicAlert(data: GroqSignalData): Promise<str
   const ema100Val = data.ema100 !== undefined ? data.ema100 : data.ema200;
 
   const defaultFallback = data.action === 'BUY'
-    ? `🚨 **صفقة سكالبينج سريعة (شراء) 🔥**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${data.entryPrice.toFixed(2)}\nهدف أرباح (TP - ATR 3x): $${data.tp.toFixed(2)}\nوقف خسارة (SL - ATR 1.5x): $${data.sl.toFixed(2)}\nمؤشر RSI: ${data.rsi.toFixed(1)} | EMA20: $${data.ema20.toFixed(2)}${ema100Val !== undefined ? ` | EMA100: $${ema100Val.toFixed(2)}` : ''}\nفرصة صعودية قوية مع الاتجاه العام!`
-    : `🚨 **صفقة سكالبينج سريعة (بيع) 📉**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${data.entryPrice.toFixed(2)}\nهدف أرباح (TP - ATR 3x): $${data.tp.toFixed(2)}\nوقف خسارة (SL - ATR 1.5x): $${data.sl.toFixed(2)}\nمؤشر RSI: ${data.rsi.toFixed(1)} | EMA20: $${data.ema20.toFixed(2)}${ema100Val !== undefined ? ` | EMA100: $${ema100Val.toFixed(2)}` : ''}\nفرصة هبوط قوية مع الاتجاه العام!`;
+    ? `🚨 **صفقة سكالبينج سريعة (شراء) 🔥**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${formatPrice(data.entryPrice)}\nهدف أرباح (TP - ATR 3x): $${formatPrice(data.tp)}\nوقف خسارة (SL - ATR 1.5x): $${formatPrice(data.sl)}\nمؤشر RSI: ${formatPrice(data.rsi)} | EMA20: $${formatPrice(data.ema20)}${ema100Val !== undefined ? ` | EMA100: $${formatPrice(ema100Val)}` : ''}\nفرصة صعودية قوية مع الاتجاه العام!`
+    : `🚨 **صفقة سكالبينج سريعة (بيع) 📉**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${formatPrice(data.entryPrice)}\nهدف أرباح (TP - ATR 3x): $${formatPrice(data.tp)}\nوقف خسارة (SL - ATR 1.5x): $${formatPrice(data.sl)}\nمؤشر RSI: ${formatPrice(data.rsi)} | EMA20: $${formatPrice(data.ema20)}${ema100Val !== undefined ? ` | EMA100: $${formatPrice(ema100Val)}` : ''}\nفرصة هبوط قوية مع الاتجاه العام!`;
 
   if (!apiKey || apiKey.includes('your_groq_api_key')) {
     return defaultFallback;
@@ -46,12 +47,12 @@ export async function generateGroqArabicAlert(data: GroqSignalData): Promise<str
 اكتب تنبيه تداول سكالبينج حماسي بلهجة مصرية عامية بناءً على البيانات التالية:
 - العملة/الأصل: ${data.symbol}
 - نوع الصفقة: ${data.action === 'BUY' ? 'شراء (BUY)' : 'بيع (SELL)'}
-- سعر الدخول الحالي: $${data.entryPrice.toFixed(2)}
-- Stop Loss (وقف الخسارة - 1.5x ATR): $${data.sl.toFixed(2)}
-- Take Profit (هدف الأرباح - 3.0x ATR): $${data.tp.toFixed(2)}
-- مؤشر RSI (14): ${data.rsi.toFixed(2)}
-- مؤشر EMA (20): $${data.ema20.toFixed(2)}
-${ema100Val !== undefined ? `- مؤشر EMA (100): $${ema100Val.toFixed(2)}\n` : ''}${data.atr ? `- مؤشر ATR (14): $${data.atr.toFixed(2)}\n` : ''}
+- سعر الدخول الحالي: $${formatPrice(data.entryPrice)}
+- Stop Loss (وقف الخسارة - 1.5x ATR): $${formatPrice(data.sl)}
+- Take Profit (هدف الأرباح - 3.0x ATR): $${formatPrice(data.tp)}
+- مؤشر RSI (14): ${formatPrice(data.rsi)}
+- مؤشر EMA (20): $${formatPrice(data.ema20)}
+${ema100Val !== undefined ? `- مؤشر EMA (100): $${formatPrice(ema100Val)}\n` : ''}${data.atr ? `- مؤشر ATR (14): $${formatPrice(data.atr)}\n` : ''}
 اجعل التنبيه مركزاً وقصيراً وحماسياً ويشجع على التنفيذ السريع ويوضح المستويات المالية بوضوح.
 `;
 
@@ -92,10 +93,10 @@ export async function generateGroqSwingAnalysis(data: GroqSwingData): Promise<st
 
   const defaultFallback = `📈 **تحليل وتوصية استثمارية (صفقة سوينغ / swing) - ${data.symbol}**\n\n` +
     `**القرار:** ${data.action === 'BUY' ? 'شراء استثماري (BUY)' : 'بيع/تخفيف (SELL)'}\n` +
-    `**سعر الدخول:** $${data.entryPrice.toFixed(2)}\n` +
-    `**وقف الخسارة (SL):** $${data.sl.toFixed(2)}\n` +
-    `**الهدف الاستثماري (TP):** $${data.tp.toFixed(2)}\n` +
-    `**المؤشرات الفنية:** SMA(50)=$${data.sma50.toFixed(2)} | MACD=${data.macd.toFixed(2)}\n\n` +
+    `**سعر الدخول:** $${formatPrice(data.entryPrice)}\n` +
+    `**وقف الخسارة (SL):** $${formatPrice(data.sl)}\n` +
+    `**الهدف الاستثماري (TP):** $${formatPrice(data.tp)}\n` +
+    `**المؤشرات الفنية:** SMA(50)=$${formatPrice(data.sma50)} | MACD=${formatPrice(data.macd)}\n\n` +
     `**أهم الأخبار:**\n${newsSummary}`;
 
   if (!apiKey || apiKey.includes('your_groq_api_key')) {
@@ -109,11 +110,12 @@ export async function generateGroqSwingAnalysis(data: GroqSwingData): Promise<st
 
 - السهم: ${data.symbol}
 - توصية النمط: ${data.action === 'BUY' ? 'شراء سوينغ (BUY)' : 'بيع / جني أرباح (SELL)'}
-- السعر الحالي: $${data.entryPrice.toFixed(2)}
-- المتوسط المتحرك SMA 50: $${data.sma50.toFixed(2)}
-- خط MACD: ${data.macd.toFixed(2)} (خط الإشارة: ${data.macdSignal.toFixed(2)})
-- Stop Loss: $${data.sl.toFixed(2)}
-- Take Profit: $${data.tp.toFixed(2)}
+- السعر الحالي: $${formatPrice(data.entryPrice)}
+- المتوسط المتحرك SMA 50: $${formatPrice(data.sma50)}
+- خط MACD: ${formatPrice(data.macd)} (خط الإشارة: ${formatPrice(data.macdSignal)})
+- Stop Loss: $${formatPrice(data.sl)}
+- Take Profit: $${formatPrice(data.tp)}
+
 
 أحدث عناوين الأخبار الخاصة بالسهم:
 ${newsSummary}

@@ -70,3 +70,15 @@ export function calculateScalpIndicators(candles: Candle[]): IndicatorResults | 
     currentAtr,
   };
 }
+
+export function formatPrice(price: number): string {
+  if (price === undefined || price === null || isNaN(price)) return '0.00';
+  const absPrice = Math.abs(price);
+  if (absPrice < 10) {
+    return price.toFixed(5);
+  }
+  if (absPrice < 100) {
+    return price.toFixed(3);
+  }
+  return price.toFixed(2);
+}

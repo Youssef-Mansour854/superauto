@@ -4,7 +4,7 @@ import Trade from '@/models/Trade';
 import TradeHistory from '@/models/TradeHistory';
 import { fetchBinanceKlines, Candle } from '@/lib/binance';
 import { fetchTwelveData5mKlines } from '@/lib/twelvedata';
-import { calculateScalpIndicators } from '@/lib/indicators';
+import { calculateScalpIndicators, formatPrice } from '@/lib/indicators';
 import { generateGroqArabicAlert } from '@/lib/groq';
 import { sendTelegramNotification } from '@/lib/telegram';
 
@@ -120,10 +120,10 @@ async function runScalperEngine() {
                 ema20: trade.ema20,
                 ema100: trade.ema100 || trade.ema200,
                 atr: trade.atr,
-                exitRsi: indExit ? parseFloat(indExit.currentRsi.toFixed(2)) : undefined,
-                exitEma20: indExit ? parseFloat(indExit.currentEma20.toFixed(2)) : undefined,
-                exitEma100: indExit ? parseFloat(indExit.currentEma100.toFixed(2)) : undefined,
-                exitAtr: indExit ? parseFloat(indExit.currentAtr.toFixed(2)) : undefined,
+                exitRsi: indExit ? indExit.currentRsi : undefined,
+                exitEma20: indExit ? indExit.currentEma20 : undefined,
+                exitEma100: indExit ? indExit.currentEma100 : undefined,
+                exitAtr: indExit ? indExit.currentAtr : undefined,
                 groqAnalysis: trade.groqAnalysis,
                 entryTimestamp: trade.timestamp,
                 closedAt
@@ -138,8 +138,8 @@ async function runScalperEngine() {
               logs.push(`Scalp trade ${trade._id} (${trade.symbol}) archived with result ${newStatus}`);
 
               const outcomeText = newStatus === 'WIN'
-                ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${currentPrice}`
-                : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${currentPrice}`;
+                ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(currentPrice)}`
+                : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(currentPrice)}`;
               await sendTelegramNotification(outcomeText);
             } else {
               // -------------------------------------------------------------
@@ -199,10 +199,10 @@ async function runScalperEngine() {
                   ema20: trade.ema20,
                   ema100: trade.ema100 || trade.ema200,
                   atr: trade.atr,
-                  exitRsi: indExit ? parseFloat(indExit.currentRsi.toFixed(2)) : undefined,
-                  exitEma20: indExit ? parseFloat(indExit.currentEma20.toFixed(2)) : undefined,
-                  exitEma100: indExit ? parseFloat(indExit.currentEma100.toFixed(2)) : undefined,
-                  exitAtr: indExit ? parseFloat(indExit.currentAtr.toFixed(2)) : undefined,
+                  exitRsi: indExit ? indExit.currentRsi : undefined,
+                  exitEma20: indExit ? indExit.currentEma20 : undefined,
+                  exitEma100: indExit ? indExit.currentEma100 : undefined,
+                  exitAtr: indExit ? indExit.currentAtr : undefined,
                   groqAnalysis: trade.groqAnalysis,
                   entryTimestamp: trade.timestamp,
                   closedAt
@@ -293,12 +293,12 @@ async function runScalperEngine() {
       // BUY: SL = entryPrice - (ATR * 1.5), TP = entryPrice + (ATR * 3.0)
       // SELL: SL = entryPrice + (ATR * 1.5), TP = entryPrice - (ATR * 3.0)
       const sl = signalType === 'BUY'
-        ? parseFloat((currentClose - (currentAtr * 1.5)).toFixed(2))
-        : parseFloat((currentClose + (currentAtr * 1.5)).toFixed(2));
+        ? currentClose - (currentAtr * 1.5)
+        : currentClose + (currentAtr * 1.5);
 
       const tp = signalType === 'BUY'
-        ? parseFloat((currentClose + (currentAtr * 3.0)).toFixed(2))
-        : parseFloat((currentClose - (currentAtr * 3.0)).toFixed(2));
+        ? currentClose + (currentAtr * 3.0)
+        : currentClose - (currentAtr * 3.0);
 
       const signalDetails = {
         symbol,
@@ -306,10 +306,10 @@ async function runScalperEngine() {
         entryPrice: currentClose,
         sl,
         tp,
-        rsi: parseFloat(currentRsi.toFixed(2)),
-        ema20: parseFloat(currentEma20.toFixed(2)),
-        ema100: parseFloat(currentEma100.toFixed(2)),
-        atr: parseFloat(currentAtr.toFixed(2))
+        rsi: currentRsi,
+        ema20: currentEma20,
+        ema100: currentEma100,
+        atr: currentAtr
       };
 
       // Generate Egyptian Arabic AI Alert via Groq
@@ -332,7 +332,7 @@ async function runScalperEngine() {
       }
 
       // Send Telegram Alert
-      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- السعر: $${currentClose}\n- SL (1.5x ATR): $${sl} | TP (3.0x ATR): $${tp}\n- ATR (14): $${signalDetails.atr}\n- RSI (14): ${signalDetails.rsi} | EMA20: $${signalDetails.ema20} | EMA100: $${signalDetails.ema100}`;
+      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- السعر: $${formatPrice(currentClose)}\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (3.0x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
       await sendTelegramNotification(telegramMsg);
 
       results.push({ symbol, signalTriggered: true, signal: signalDetails, groqAnalysis });
