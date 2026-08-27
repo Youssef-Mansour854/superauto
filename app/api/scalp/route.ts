@@ -32,6 +32,20 @@ function normalizeSymbol(symbol: string): { symbol: string; source: string } {
   return matching || { symbol, source: 'TWELVEDATA' };
 }
 
+function isForexPair(symbol: string): boolean {
+  const norm = symbol.toUpperCase();
+  if (norm.includes('XAU') || norm.includes('XAG') || norm.includes('GOLD')) {
+    return false;
+  }
+  if (norm.startsWith('^') || norm.includes('IXIC') || norm.includes('US30') || norm.includes('SPX') || norm.includes('NAS') || norm.includes('NDX') || norm.includes('GER') || norm.includes('DAX')) {
+    return false;
+  }
+  if (norm.includes('BTC') || norm.includes('ETH') || norm.includes('SOL')) {
+    return false;
+  }
+  return true;
+}
+
 async function fetchAsset5mCandles(symbol: string, source: string): Promise<Candle[]> {
   if (source === 'BINANCE') {
     return await fetchBinanceKlines(symbol, '5m', 250);
@@ -162,49 +176,64 @@ async function runScalperEngine() {
                 }
               }
 
-              // 2. Time Stop Logic (Close at market price if elapsed time >= 60 minutes)
+              // 2. Smart Time Stop Logic (120 min max holding time: move SL to Breakeven if in profit, close if floating in loss)
               const entryTime = trade.timestamp ? new Date(trade.timestamp).getTime() : 0;
               const timeElapsedMs = Date.now() - entryTime;
 
-              if (entryTime > 0 && timeElapsedMs >= 3600000) {
-                const closedAt = new Date();
-                const indExit = candles.length >= 100 ? calculateScalpIndicators(candles) : null;
-                const timeStopStatus: 'WIN' | 'LOSS' = trade.action === 'BUY'
-                  ? (currentPrice >= trade.entryPrice ? 'WIN' : 'LOSS')
-                  : (currentPrice <= trade.entryPrice ? 'WIN' : 'LOSS');
+              if (entryTime > 0 && timeElapsedMs >= 7200000) { // 120 minutes
+                const isProfit = trade.action === 'BUY'
+                  ? currentPrice > trade.entryPrice
+                  : currentPrice < trade.entryPrice;
 
-                await TradeHistory.create({
-                  tradeId: trade._id.toString(),
-                  symbol: trade.symbol,
-                  action: trade.action,
-                  tradeType: trade.tradeType,
-                  entryPrice: trade.entryPrice,
-                  exitPrice: currentPrice,
-                  sl: trade.sl,
-                  tp: trade.tp,
-                  status: timeStopStatus,
-                  rsi: trade.rsi,
-                  ema20: trade.ema20,
-                  ema100: trade.ema100 || trade.ema200,
-                  atr: trade.atr,
-                  exitRsi: indExit ? indExit.currentRsi : undefined,
-                  exitEma20: indExit ? indExit.currentEma20 : undefined,
-                  exitEma100: indExit ? indExit.currentEma100 : undefined,
-                  exitAtr: indExit ? indExit.currentAtr : undefined,
-                  groqAnalysis: trade.groqAnalysis,
-                  entryTimestamp: trade.timestamp,
-                  closedAt
-                });
+                if (isProfit) {
+                  if (!trade.breakevenApplied || trade.sl !== trade.entryPrice) {
+                    trade.sl = trade.entryPrice;
+                    trade.breakevenApplied = true;
+                    await trade.save();
 
-                trade.status = 'ARCHIVED';
-                trade.exitPrice = currentPrice;
-                trade.closedAt = closedAt;
-                await trade.save();
+                    const timeStopMsg = `⏱️ (SMART TIME STOP) 120m limit reached while in profit! SL moved to Entry Price (Breakeven) for ${trade.symbol}.`;
+                    logs.push(timeStopMsg);
+                    console.log(timeStopMsg);
+                    await sendTelegramNotification(timeStopMsg);
+                  }
+                } else {
+                  // Floating in loss - close trade at market price
+                  const closedAt = new Date();
+                  const indExit = candles.length >= 100 ? calculateScalpIndicators(candles) : null;
 
-                const timeStopMsg = `⏱️ (TIME STOP) Trade closed at market price to free capital for ${trade.symbol}.`;
-                logs.push(timeStopMsg);
-                console.log(timeStopMsg);
-                await sendTelegramNotification(timeStopMsg);
+                  await TradeHistory.create({
+                    tradeId: trade._id.toString(),
+                    symbol: trade.symbol,
+                    action: trade.action,
+                    tradeType: trade.tradeType,
+                    entryPrice: trade.entryPrice,
+                    exitPrice: currentPrice,
+                    sl: trade.sl,
+                    tp: trade.tp,
+                    status: 'LOSS',
+                    rsi: trade.rsi,
+                    ema20: trade.ema20,
+                    ema100: trade.ema100 || trade.ema200,
+                    atr: trade.atr,
+                    exitRsi: indExit ? indExit.currentRsi : undefined,
+                    exitEma20: indExit ? indExit.currentEma20 : undefined,
+                    exitEma100: indExit ? indExit.currentEma100 : undefined,
+                    exitAtr: indExit ? indExit.currentAtr : undefined,
+                    groqAnalysis: trade.groqAnalysis,
+                    entryTimestamp: trade.timestamp,
+                    closedAt
+                  });
+
+                  trade.status = 'ARCHIVED';
+                  trade.exitPrice = currentPrice;
+                  trade.closedAt = closedAt;
+                  await trade.save();
+
+                  const timeStopMsg = `⏱️ (TIME STOP) 120m limit reached while in loss. Trade closed at market price to free capital for ${trade.symbol}.`;
+                  logs.push(timeStopMsg);
+                  console.log(timeStopMsg);
+                  await sendTelegramNotification(timeStopMsg);
+                }
               }
             }
           }
@@ -279,15 +308,16 @@ async function runScalperEngine() {
       logs.push(`🚨 ${signalType} Scalp Signal Triggered for ${symbol}!`);
 
       // Dynamic Risk Management (ATR-based SL & TP)
-      // BUY: SL = entryPrice - (ATR * 1.5), TP = entryPrice + (ATR * 3.0)
-      // SELL: SL = entryPrice + (ATR * 1.5), TP = entryPrice - (ATR * 3.0)
+      // 2.0 * ATR for Forex pairs (quicker exits), 3.0 * ATR for Gold/Indices
+      const tpMultiplier = isForexPair(symbol) ? 2.0 : 3.0;
+
       const sl = signalType === 'BUY'
         ? currentClose - (currentAtr * 1.5)
         : currentClose + (currentAtr * 1.5);
 
       const tp = signalType === 'BUY'
-        ? currentClose + (currentAtr * 3.0)
-        : currentClose - (currentAtr * 3.0);
+        ? currentClose + (currentAtr * tpMultiplier)
+        : currentClose - (currentAtr * tpMultiplier);
 
       const signalDetails = {
         symbol,
@@ -321,7 +351,7 @@ async function runScalperEngine() {
       }
 
       // Send Telegram Alert
-      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- السعر: $${formatPrice(currentClose)}\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (3.0x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
+      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- السعر: $${formatPrice(currentClose)}\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (${tpMultiplier.toFixed(1)}x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
       await sendTelegramNotification(telegramMsg);
 
       return { symbol, signalTriggered: true, signal: signalDetails, groqAnalysis };
