@@ -1,0 +1,367 @@
+=== TWELVE DATA NASDAQ SYMBOL TEST ===
+
+====================================================
+Testing Symbol: "^IXIC"
+====================================================
+[1] Fetching Quote for "^IXIC"...
+Quote HTTP Status: 401
+Quote Response: {
+  "code": 401,
+  "message": "The 'demo' API key is only used for initial familiarity. To become a full user, you can request your own API key at https://twelvedata.com/pricing. It is absolutely free, and it’s yours for a lifetime. It only takes 10 seconds to obtain your own API key!",
+  "status": "error"
+}
+
+[2] Fetching 5min Time Series for "^IXIC"...
+Time Series HTTP Status: 401
+Time Series Response: {
+  "code": 401,
+  "message": "The 'demo' API key is only used for initial familiarity. To become a full user, you can request your own API key at https://twelvedata.com/pricing. It is absolutely free, and it’s yours for a lifetime. It only takes 10 seconds to obtain your own API key!",
+  "status": "error"
+}
+
+[3] Searching Symbol info for "^IXIC"...
+Symbol Search HTTP Status: 200
+Symbol Search Response: {
+  "data": [
+    {
+      "symbol": "IXI",
+      "instrument_name": "Ixico plc",
+      "exchange": "LSE",
+      "mic_code": "AIMX",
+      "exchange_timezone": "Europe/London",
+      "instrument_type": "Common Stock",
+      "country": "United Kingdom",
+      "currency": "GBp"
+    },
+    {
+      "symbol": "PHYOF",
+      "instrument_name": "Ixico plc",
+      "exchange": "OTC",
+      "mic_code": "PINX",
+      "exchange_timezone": "America/New_York",
+      "instrument_type": "Common Stock",
+      "country": "United States",
+      "currency": "USD"
+    },
+    {
+      "symbol": "PYPB",
+      "instrument_name": "Ixico plc",
+      "exchange": "FSX",
+      "mic_code": "XFRA",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "Common Stock",
+      "country": "Germany",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "PYPB",
+      "instrument_name": "Ixico plc",
+      "exchange": "XSTU",
+      "mic_code": "XSTU",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "Common Stock",
+      "country": "Germany",
+      "currency": "EUR"
+    }
+  ],
+  "status": "ok"
+}
+
+
+====================================================
+Testing Symbol: "IXIC"
+====================================================
+[1] Fetching Quote for "IXIC"...
+Quote HTTP Status: 401
+Quote Response: {
+  "code": 401,
+  "message": "The 'demo' API key is only used for initial familiarity. To become a full user, you can request your own API key at https://twelvedata.com/pricing. It is absolutely free, and it’s yours for a lifetime. It only takes 10 seconds to obtain your own API key!",
+  "status": "error"
+}
+
+[2] Fetching 5min Time Series for "IXIC"...
+Time Series HTTP Status: 401
+Time Series Response: {
+  "code": 401,
+  "message": "The 'demo' API key is only used for initial familiarity. To become a full user, you can request your own API key at https://twelvedata.com/pricing. It is absolutely free, and it’s yours for a lifetime. It only takes 10 seconds to obtain your own API key!",
+  "status": "error"
+}
+
+[3] Searching Symbol info for "IXIC"...
+Symbol Search HTTP Status: 200
+Symbol Search Response: {
+  "data": [
+    {
+      "symbol": "IXI",
+      "instrument_name": "Ixico plc",
+      "exchange": "LSE",
+      "mic_code": "AIMX",
+      "exchange_timezone": "Europe/London",
+      "instrument_type": "Common Stock",
+      "country": "United Kingdom",
+      "currency": "GBp"
+    },
+    {
+      "symbol": "PHYOF",
+      "instrument_name": "Ixico plc",
+      "exchange": "OTC",
+      "mic_code": "PINX",
+      "exchange_timezone": "America/New_York",
+      "instrument_type": "Common Stock",
+      "country": "United States",
+      "currency": "USD"
+    },
+    {
+      "symbol": "PYPB",
+      "instrument_name": "Ixico plc",
+      "exchange": "FSX",
+      "mic_code": "XFRA",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "Common Stock",
+      "country": "Germany",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "PYPB",
+      "instrument_name": "Ixico plc",
+      "exchange": "XSTU",
+      "mic_code": "XSTU",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "Common Stock",
+      "country": "Germany",
+      "currency": "EUR"
+    }
+  ],
+  "status": "ok"
+}
+
+
+====================================================
+Testing Symbol: "NDX"
+====================================================
+[1] Fetching Quote for "NDX"...
+Quote HTTP Status: 401
+Quote Response: {
+  "code": 401,
+  "message": "The 'demo' API key is only used for initial familiarity. To become a full user, you can request your own API key at https://twelvedata.com/pricing. It is absolutely free, and it’s yours for a lifetime. It only takes 10 seconds to obtain your own API key!",
+  "status": "error"
+}
+
+[2] Fetching 5min Time Series for "NDX"...
+Time Series HTTP Status: 401
+Time Series Response: {
+  "code": 401,
+  "message": "The 'demo' API key is only used for initial familiarity. To become a full user, you can request your own API key at https://twelvedata.com/pricing. It is absolutely free, and it’s yours for a lifetime. It only takes 10 seconds to obtain your own API key!",
+  "status": "error"
+}
+
+[3] Searching Symbol info for "NDX"...
+Symbol Search HTTP Status: 200
+Symbol Search Response: {
+  "data": [
+    {
+      "symbol": "NDX",
+      "instrument_name": "Nordex SE - Unsponsored ADR",
+      "exchange": "FSX",
+      "mic_code": "XFRA",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "American Depositary Receipt",
+      "country": "Germany",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDX1",
+      "instrument_name": "Nordex SE",
+      "exchange": "XETR",
+      "mic_code": "XETR",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "Common Stock",
+      "country": "Germany",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDX1",
+      "instrument_name": "Nordex SE",
+      "exchange": "XSTU",
+      "mic_code": "XSTU",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "Common Stock",
+      "country": "Germany",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDX1",
+      "instrument_name": "Nordex SE",
+      "exchange": "FSX",
+      "mic_code": "XFRA",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "Common Stock",
+      "country": "Germany",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDX1",
+      "instrument_name": "Nordex SE",
+      "exchange": "Munich",
+      "mic_code": "XMUN",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "Common Stock",
+      "country": "Germany",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDX1",
+      "instrument_name": "Nordex SE",
+      "exchange": "VSE",
+      "mic_code": "XWBO",
+      "exchange_timezone": "Europe/Vienna",
+      "instrument_type": "Common Stock",
+      "country": "Austria",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDX1",
+      "instrument_name": "Nordex SE",
+      "exchange": "XDUS",
+      "mic_code": "XDUS",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "Common Stock",
+      "country": "Germany",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDX1",
+      "instrument_name": "Nordex SE",
+      "exchange": "XHAN",
+      "mic_code": "XHAN",
+      "exchange_timezone": "Europe/Berlin",
+      "instrument_type": "Common Stock",
+      "country": "Germany",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDX1",
+      "instrument_name": "Nordex SE",
+      "exchange": "SIX",
+      "mic_code": "XSWX",
+      "exchange_timezone": "Europe/Zurich",
+      "instrument_type": "Common Stock",
+      "country": "Switzerland",
+      "currency": "CHF"
+    },
+    {
+      "symbol": "NDX1D",
+      "instrument_name": "Nordex SE",
+      "exchange": "CBOE",
+      "mic_code": "BCXE",
+      "exchange_timezone": "Europe/London",
+      "instrument_type": "Common Stock",
+      "country": "United Kingdom",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDXH",
+      "instrument_name": "Amundi ETF NASDAQ-100 EUR Hedged Daily UCITS ETF",
+      "exchange": "MTA",
+      "mic_code": "XMIL",
+      "exchange_timezone": "Europe/Rome",
+      "instrument_type": "ETF",
+      "country": "Italy",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDXH",
+      "instrument_name": "Amundi ETF NASDAQ-100 EUR Hedged Daily UCITS ETF",
+      "exchange": "Euronext",
+      "mic_code": "XPAR",
+      "exchange_timezone": "Europe/Paris",
+      "instrument_type": "ETF",
+      "country": "France",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDXHP",
+      "instrument_name": "Amundi ETF NASDAQ-100 EUR Hedged Daily UCITS ETF",
+      "exchange": "CBOE",
+      "mic_code": "BCXE",
+      "exchange_timezone": "Europe/London",
+      "instrument_type": "ETF",
+      "country": "United Kingdom",
+      "currency": "EUR"
+    },
+    {
+      "symbol": "NDX01",
+      "instrument_name": "ChinaAMC Nasdaq 100 ETF",
+      "exchange": "SET",
+      "mic_code": "XBKK",
+      "exchange_timezone": "Asia/Bangkok",
+      "instrument_type": "Depositary Receipt",
+      "country": "Thailand",
+      "currency": "THB"
+    },
+    {
+      "symbol": "NDXEX",
+      "instrument_name": "iShares Nasdaq 100 UCITS ETF (DE)",
+      "exchange": "BSE",
+      "mic_code": "XBUD",
+      "exchange_timezone": "Europe/Budapest",
+      "instrument_type": "ETF",
+      "country": "Hungary",
+      "currency": "HUF"
+    },
+    {
+      "symbol": "NDXKX",
+      "instrument_name": "Shelton Capital Management Nasdaq-100 Index Fund Class K",
+      "exchange": "NASDAQ",
+      "mic_code": "XNAS",
+      "exchange_timezone": "America/New_York",
+      "instrument_type": "Mutual Fund",
+      "country": "United States",
+      "currency": "USD"
+    },
+    {
+      "symbol": "449190",
+      "instrument_name": "Samsung Kodex NDX ETF",
+      "exchange": "KRX",
+      "mic_code": "XKRX",
+      "exchange_timezone": "Asia/Seoul",
+      "instrument_type": "ETF",
+      "country": "South Korea",
+      "currency": "KRW"
+    },
+    {
+      "symbol": "ODTE",
+      "instrument_name": "VegaShares SPX NDX RTY Premium Income ETF",
+      "exchange": "NASDAQ",
+      "mic_code": "XNMS",
+      "exchange_timezone": "America/New_York",
+      "instrument_type": "ETF",
+      "country": "United States",
+      "currency": "USD"
+    },
+    {
+      "symbol": "ODTE",
+      "instrument_name": "VegaShares SPX NDX RTY Premium Income ETF",
+      "exchange": "IEX",
+      "mic_code": "IEXG",
+      "exchange_timezone": "America/New_York",
+      "instrument_type": "ETF",
+      "country": "United States",
+      "currency": "USD"
+    },
+    {
+      "symbol": "MTF.F104",
+      "instrument_name": "MTF SAL Level NDX100X3 Mutual Fund",
+      "exchange": "TASE",
+      "mic_code": "XTAE",
+      "exchange_timezone": "Asia/Jerusalem",
+      "instrument_type": "ETF",
+      "country": "Israel",
+      "currency": "ILA"
+    }
+  ],
+  "status": "ok"
+}
+
+
+=== TEST COMPLETED ===

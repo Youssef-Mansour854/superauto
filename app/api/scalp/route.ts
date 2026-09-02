@@ -15,7 +15,7 @@ export const revalidate = 0;
 const SCALP_WATCHLIST = [
   { symbol: 'XAU/USD', source: 'TWELVEDATA' },
   { symbol: 'EUR/USD', source: 'TWELVEDATA' },
-  { symbol: '^IXIC', source: 'TWELVEDATA' }
+  { symbol: 'IXIC', source: 'TWELVEDATA' }
 ];
 
 function normalizeSymbol(symbol: string): { symbol: string; source: string } {
@@ -26,7 +26,7 @@ function normalizeSymbol(symbol: string): { symbol: string; source: string } {
     return { symbol: 'EUR/USD', source: 'TWELVEDATA' };
   }
   if (symbol === '^IXIC' || symbol === 'IXIC') {
-    return { symbol: '^IXIC', source: 'TWELVEDATA' };
+    return { symbol: 'IXIC', source: 'TWELVEDATA' };
   }
   const matching = SCALP_WATCHLIST.find(i => i.symbol === symbol);
   return matching || { symbol, source: 'TWELVEDATA' };
