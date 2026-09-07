@@ -89,7 +89,7 @@ export async function fetchTwelveData5mKlines(
 }
 
 export async function fetchTwelveDataBatch5mKlines(
-  symbols: string[] = ['XAU/USD', 'BTC/USD'],
+  symbols: string[] = ['XAU/USD', 'EUR/USD'],
   interval: string = '5min',
   outputsize: number = 100
 ): Promise<Record<string, Candle[]>> {

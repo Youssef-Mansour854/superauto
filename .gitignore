@@ -35,3 +35,10 @@ env/
 .idea/
 .ds_store
 Thumbs.db
+
+# Market data dumps (Candles)
+data/*.json
+
+# Backtest runtime console logs & audits
+backtest_console.txt
+readiness_audit_output.json

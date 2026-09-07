@@ -1,0 +1,25 @@
+{
+  "metrics": {
+    "totalTrades": 130,
+    "winCount": 53,
+    "lossCount": 77,
+    "winRate": 40.8,
+    "netPoints": 531752.76,
+    "grossWinPoints": 1383659.2,
+    "grossLossPoints": 851906.44,
+    "profitFactor": 1.62,
+    "avgWin": 26106.78,
+    "avgLoss": 11063.72,
+    "rewardRiskRealized": 2.36,
+    "maxDrawdown": 114180.3
+  },
+  "bootstrap": {
+    "ci95": [
+      1.02,
+      2.59
+    ],
+    "median": 1.63,
+    "probPfAbove1": 97.9
+  },
+  "tradesCount": 130
+}

@@ -1,0 +1,298 @@
+[
+  {
+    "name": "0. Baseline (No Filters - 24/7)",
+    "totalTrades": 507,
+    "winCount": 143,
+    "lossCount": 364,
+    "winRate": 28.21,
+    "netPnL": 1219.11,
+    "grossWin": 32988.45,
+    "grossLoss": 31769.34,
+    "profitFactor": 1.038,
+    "avgWin": 230.69,
+    "avgLoss": 87.28,
+    "realizedRR": 2.64,
+    "maxDrawdown": 3019.08,
+    "bootstrapPF": {
+      "ci95": [
+        0.81,
+        1.31
+      ],
+      "median": 1.04,
+      "probPfAbove1": 61.8
+    },
+    "drawdownPeriods": {
+      "p1_Jul17_24": {
+        "trades": 73,
+        "pnl": -1033.26
+      },
+      "p2_Aug05_13": {
+        "trades": 78,
+        "pnl": -1522.52
+      },
+      "p3_Aug21_27": {
+        "trades": 62,
+        "pnl": -1781.41
+      }
+    }
+  },
+  {
+    "name": "1A. HTF 1h + EMA 100 (المطلوب تحديداً)",
+    "totalTrades": 325,
+    "winCount": 91,
+    "lossCount": 234,
+    "winRate": 28,
+    "netPnL": -262.85,
+    "grossWin": 20545.01,
+    "grossLoss": 20807.86,
+    "profitFactor": 0.987,
+    "avgWin": 225.77,
+    "avgLoss": 88.92,
+    "realizedRR": 2.54,
+    "maxDrawdown": 2873.7,
+    "bootstrapPF": {
+      "ci95": [
+        0.72,
+        1.32
+      ],
+      "median": 0.99,
+      "probPfAbove1": 46.9
+    },
+    "drawdownPeriods": {
+      "p1_Jul17_24": {
+        "trades": 46,
+        "pnl": -266.86
+      },
+      "p2_Aug05_13": {
+        "trades": 51,
+        "pnl": -319.76
+      },
+      "p3_Aug21_27": {
+        "trades": 39,
+        "pnl": -420.14
+      }
+    }
+  },
+  {
+    "name": "1B. HTF 1h + EMA 50",
+    "totalTrades": 361,
+    "winCount": 95,
+    "lossCount": 266,
+    "winRate": 26.32,
+    "netPnL": -1370.14,
+    "grossWin": 22024.64,
+    "grossLoss": 23394.78,
+    "profitFactor": 0.941,
+    "avgWin": 231.84,
+    "avgLoss": 87.95,
+    "realizedRR": 2.64,
+    "maxDrawdown": 2751.73,
+    "bootstrapPF": {
+      "ci95": [
+        0.69,
+        1.25
+      ],
+      "median": 0.94,
+      "probPfAbove1": 33.7
+    },
+    "drawdownPeriods": {
+      "p1_Jul17_24": {
+        "trades": 51,
+        "pnl": -653.55
+      },
+      "p2_Aug05_13": {
+        "trades": 56,
+        "pnl": -1458.23
+      },
+      "p3_Aug21_27": {
+        "trades": 47,
+        "pnl": -1468.34
+      }
+    }
+  },
+  {
+    "name": "1C. HTF 15m + EMA 100",
+    "totalTrades": 393,
+    "winCount": 104,
+    "lossCount": 289,
+    "winRate": 26.46,
+    "netPnL": -1603.75,
+    "grossWin": 23709.12,
+    "grossLoss": 25312.87,
+    "profitFactor": 0.937,
+    "avgWin": 227.97,
+    "avgLoss": 87.59,
+    "realizedRR": 2.6,
+    "maxDrawdown": 3215.91,
+    "bootstrapPF": {
+      "ci95": [
+        0.7,
+        1.23
+      ],
+      "median": 0.94,
+      "probPfAbove1": 32.1
+    },
+    "drawdownPeriods": {
+      "p1_Jul17_24": {
+        "trades": 54,
+        "pnl": -846.97
+      },
+      "p2_Aug05_13": {
+        "trades": 58,
+        "pnl": -1172.53
+      },
+      "p3_Aug21_27": {
+        "trades": 54,
+        "pnl": -1978.24
+      }
+    }
+  },
+  {
+    "name": "2A. Volatility (Lookback 20, Range/ATR >= 3.0)",
+    "totalTrades": 493,
+    "winCount": 139,
+    "lossCount": 354,
+    "winRate": 28.19,
+    "netPnL": 1122.28,
+    "grossWin": 32333.9,
+    "grossLoss": 31211.62,
+    "profitFactor": 1.036,
+    "avgWin": 232.62,
+    "avgLoss": 88.17,
+    "realizedRR": 2.64,
+    "maxDrawdown": 2701.14,
+    "bootstrapPF": {
+      "ci95": [
+        0.8,
+        1.32
+      ],
+      "median": 1.04,
+      "probPfAbove1": 61.5
+    },
+    "drawdownPeriods": {
+      "p1_Jul17_24": {
+        "trades": 71,
+        "pnl": -1237.01
+      },
+      "p2_Aug05_13": {
+        "trades": 76,
+        "pnl": -1459.35
+      },
+      "p3_Aug21_27": {
+        "trades": 61,
+        "pnl": -1463.47
+      }
+    }
+  },
+  {
+    "name": "2B. Volatility (Lookback 20, Range/ATR >= 3.5)",
+    "totalTrades": 436,
+    "winCount": 115,
+    "lossCount": 321,
+    "winRate": 26.38,
+    "netPnL": -2079.71,
+    "grossWin": 26820.49,
+    "grossLoss": 28900.2,
+    "profitFactor": 0.928,
+    "avgWin": 233.22,
+    "avgLoss": 90.03,
+    "realizedRR": 2.59,
+    "maxDrawdown": 4191.34,
+    "bootstrapPF": {
+      "ci95": [
+        0.71,
+        1.2
+      ],
+      "median": 0.93,
+      "probPfAbove1": 28.3
+    },
+    "drawdownPeriods": {
+      "p1_Jul17_24": {
+        "trades": 58,
+        "pnl": -1342.6
+      },
+      "p2_Aug05_13": {
+        "trades": 75,
+        "pnl": -1510.76
+      },
+      "p3_Aug21_27": {
+        "trades": 51,
+        "pnl": -2002.76
+      }
+    }
+  },
+  {
+    "name": "2C. Volatility (Lookback 30, Range/ATR >= 3.8)",
+    "totalTrades": 489,
+    "winCount": 138,
+    "lossCount": 351,
+    "winRate": 28.22,
+    "netPnL": 921.28,
+    "grossWin": 32222.84,
+    "grossLoss": 31301.56,
+    "profitFactor": 1.029,
+    "avgWin": 233.5,
+    "avgLoss": 89.18,
+    "realizedRR": 2.62,
+    "maxDrawdown": 3151.36,
+    "bootstrapPF": {
+      "ci95": [
+        0.8,
+        1.31
+      ],
+      "median": 1.03,
+      "probPfAbove1": 59.1
+    },
+    "drawdownPeriods": {
+      "p1_Jul17_24": {
+        "trades": 71,
+        "pnl": -987.53
+      },
+      "p2_Aug05_13": {
+        "trades": 76,
+        "pnl": -1450.38
+      },
+      "p3_Aug21_27": {
+        "trades": 61,
+        "pnl": -1913.69
+      }
+    }
+  },
+  {
+    "name": "2D. Volatility (Lookback 30, Range/ATR >= 4.4)",
+    "totalTrades": 421,
+    "winCount": 115,
+    "lossCount": 306,
+    "winRate": 27.32,
+    "netPnL": 288.69,
+    "grossWin": 26440.31,
+    "grossLoss": 26151.62,
+    "profitFactor": 1.011,
+    "avgWin": 229.92,
+    "avgLoss": 85.46,
+    "realizedRR": 2.69,
+    "maxDrawdown": 2702.61,
+    "bootstrapPF": {
+      "ci95": [
+        0.77,
+        1.31
+      ],
+      "median": 1.01,
+      "probPfAbove1": 53.1
+    },
+    "drawdownPeriods": {
+      "p1_Jul17_24": {
+        "trades": 60,
+        "pnl": -311.06
+      },
+      "p2_Aug05_13": {
+        "trades": 68,
+        "pnl": -941.58
+      },
+      "p3_Aug21_27": {
+        "trades": 52,
+        "pnl": -1744.52
+      }
+    }
+  }
+]

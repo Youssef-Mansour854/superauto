@@ -1,0 +1,44 @@
+{
+  "gold": [
+    {
+      "name": "Gold: Hybrid Soft 1.5x + Hard 3.0x",
+      "trades": 395,
+      "wins": 113,
+      "losses": 282,
+      "winRate": 28.6,
+      "netPnL": 478.71,
+      "profitFactor": 1.4,
+      "maxDrawdown": 121.26,
+      "worstLoss": -17.65,
+      "bootstrapCI": "[1.08 - 1.8]",
+      "probAbove1": "99.5%",
+      "reasons": {
+        "SOFT_SL_CLOSE": 146,
+        "TP": 113,
+        "TIME_STOP_LOSS": 14,
+        "HARD_SL_WICK": 122
+      }
+    }
+  ],
+  "qqq": [
+    {
+      "name": "QQQ: Hybrid Soft 1.5x + Hard 2.5x (TP=2.0x)",
+      "trades": 146,
+      "wins": 49,
+      "losses": 97,
+      "winRate": 33.6,
+      "netPnL": 30.5,
+      "profitFactor": 1.33,
+      "maxDrawdown": 15.23,
+      "worstLoss": -5.18,
+      "bootstrapCI": "[0.84 - 2.13]",
+      "probAbove1": "88.8%",
+      "reasons": {
+        "HARD_SL_WICK": 59,
+        "SOFT_SL_CLOSE": 35,
+        "TP": 49,
+        "TIME_STOP_LOSS": 3
+      }
+    }
+  ]
+}

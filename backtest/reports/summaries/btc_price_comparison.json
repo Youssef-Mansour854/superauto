@@ -1,0 +1,77 @@
+{
+  "matched": 493,
+  "avgDiffPct": 0.4147,
+  "maxDiffPct": 3.1468,
+  "maxDiffDetail": {
+    "datetime": "2026-09-04 14:45:00",
+    "tdClose": 78697.67,
+    "yClose": 81254.5703125,
+    "diffAbs": 2556.9003125000017,
+    "diffPct": 3.146777224550352
+  },
+  "sampleComparisons": [
+    {
+      "datetime": "2026-09-03 17:50:00",
+      "twelveData": 81017.95,
+      "yahooFinance": 80252.3984375,
+      "diff": 765.55,
+      "diffPct": "0.9539%"
+    },
+    {
+      "datetime": "2026-09-03 17:55:00",
+      "twelveData": 81042,
+      "yahooFinance": 80550.0078125,
+      "diff": 491.99,
+      "diffPct": "0.6108%"
+    },
+    {
+      "datetime": "2026-09-03 18:00:00",
+      "twelveData": 81170.26,
+      "yahooFinance": 80812.4296875,
+      "diff": 357.83,
+      "diffPct": "0.4428%"
+    },
+    {
+      "datetime": "2026-09-03 18:05:00",
+      "twelveData": 81320.84,
+      "yahooFinance": 80580.71875,
+      "diff": 740.12,
+      "diffPct": "0.9185%"
+    },
+    {
+      "datetime": "2026-09-03 18:10:00",
+      "twelveData": 81259.55,
+      "yahooFinance": 80559.1171875,
+      "diff": 700.43,
+      "diffPct": "0.8695%"
+    },
+    {
+      "datetime": "2026-09-04 02:40:00",
+      "twelveData": 80744.01,
+      "yahooFinance": 81237.390625,
+      "diff": 493.38,
+      "diffPct": "0.6073%"
+    },
+    {
+      "datetime": "2026-09-04 11:00:00",
+      "twelveData": 81109.39,
+      "yahooFinance": 80624.1171875,
+      "diff": 485.27,
+      "diffPct": "0.6019%"
+    },
+    {
+      "datetime": "2026-09-04 19:20:00",
+      "twelveData": 79804.38,
+      "yahooFinance": 79518.1171875,
+      "diff": 286.26,
+      "diffPct": "0.36%"
+    },
+    {
+      "datetime": "2026-09-05 03:40:00",
+      "twelveData": 79622.75,
+      "yahooFinance": 79644.9609375,
+      "diff": 22.21,
+      "diffPct": "0.0279%"
+    }
+  ]
+}

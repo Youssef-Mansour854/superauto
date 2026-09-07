@@ -11,11 +11,29 @@ import { sendTelegramNotification } from '@/lib/telegram';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+export interface ScalpWatchlistItem {
+  symbol: string;
+  source: string;
+  enabled: boolean;
+  notes?: string;
+}
+
 // Watchlist symbols for 5-minute High-Frequency Scalper Engine
-const SCALP_WATCHLIST = [
-  { symbol: 'XAU/USD', source: 'TWELVEDATA' },
-  { symbol: 'EUR/USD', source: 'TWELVEDATA' },
-  { symbol: 'IXIC', source: 'TWELVEDATA' }
+export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
+  { symbol: 'XAU/USD', source: 'TWELVEDATA', enabled: true },
+  {
+    symbol: 'EUR/USD',
+    source: 'TWELVEDATA',
+    enabled: false,
+    notes: 'PAUSED: marginal edge even after best tuning found (session filter + TP 3.0x ATR), still net negative (-40 pips / PF 0.94 over 71 days). Revisit only with a different entry strategy (mean-reversion, not trend-following).'
+  },
+  { symbol: 'QQQ', source: 'TWELVEDATA', enabled: true },
+  {
+    symbol: 'BTC/USD',
+    source: 'TWELVEDATA',
+    enabled: false,
+    notes: 'REJECTED: 61.8% win rate in backtests, negative net expectancy. Strictly disabled from live engine.'
+  }
 ];
 
 function normalizeSymbol(symbol: string): { symbol: string; source: string } {
@@ -25,11 +43,59 @@ function normalizeSymbol(symbol: string): { symbol: string; source: string } {
   if (symbol === 'EURUSD=X' || symbol === 'EURUSD' || symbol === 'EUR/USD') {
     return { symbol: 'EUR/USD', source: 'TWELVEDATA' };
   }
-  if (symbol === '^IXIC' || symbol === 'IXIC') {
-    return { symbol: 'IXIC', source: 'TWELVEDATA' };
+  if (symbol === 'BTC-USD' || symbol === 'BTCUSD' || symbol === 'BTC/USD') {
+    return { symbol: 'BTC/USD', source: 'TWELVEDATA' };
+  }
+  if (symbol === '^IXIC' || symbol === 'IXIC' || symbol === 'QQQ') {
+    return { symbol: 'QQQ', source: 'TWELVEDATA' };
   }
   const matching = SCALP_WATCHLIST.find(i => i.symbol === symbol);
-  return matching || { symbol, source: 'TWELVEDATA' };
+  return matching ? { symbol: matching.symbol, source: matching.source } : { symbol, source: 'TWELVEDATA' };
+}
+
+// Per-symbol Session Filter (Africa/Cairo Time)
+interface SessionFilterConfig {
+  enabled: boolean;
+  startHourCairo: number;
+  endHourCairo: number;
+}
+
+const SESSION_FILTERS: Record<string, SessionFilterConfig> = {
+  'EUR/USD': { enabled: true, startHourCairo: 0, endHourCairo: 8 },  // Block Asian session 00:00 - 08:00 Cairo
+  'XAU/USD': { enabled: false, startHourCairo: 0, endHourCairo: 24 }, // 24h baseline for Gold
+  'QQQ': { enabled: false, startHourCairo: 16.5, endHourCairo: 23.0 }  // Disabled by default (US Session 16:30 - 23:00 Cairo)
+};
+
+function isSessionAllowed(symbol: string, date: Date = new Date()): boolean {
+  const norm = normalizeSymbol(symbol).symbol;
+  const filter = SESSION_FILTERS[norm];
+  if (!filter || !filter.enabled) return true;
+
+  const utcHours = date.getUTCHours();
+  const utcMinutes = date.getUTCMinutes();
+  const cairoDecimalHour = ((utcHours + 3) % 24) + (utcMinutes / 60);
+
+  if (norm === 'EUR/USD') {
+    // BLOCK_BETWEEN 00:00 and 08:00
+    return !(cairoDecimalHour >= filter.startHourCairo && cairoDecimalHour < filter.endHourCairo);
+  }
+  // ALLOW_BETWEEN
+  return cairoDecimalHour >= filter.startHourCairo && cairoDecimalHour < filter.endHourCairo;
+}
+
+function isCryptoPair(symbol: string): boolean {
+  const norm = (symbol || '').toUpperCase();
+  return norm.includes('BTC') || norm.includes('ETH') || norm.includes('SOL');
+}
+
+function isMarketWeekend(symbol: string, date: Date = new Date()): boolean {
+  const utcDay = date.getUTCDay();
+  // Saturday (6) or Sunday (0)
+  if (utcDay !== 0 && utcDay !== 6) return false;
+  // Crypto trades 24/7/365, never restricted on weekends
+  if (isCryptoPair(symbol)) return false;
+  // Forex, Metals, Indices are closed on weekends
+  return true;
 }
 
 function isForexPair(symbol: string): boolean {
@@ -57,21 +123,10 @@ async function runScalperEngine() {
   const logs: string[] = [];
   logs.push(`Starting 5m Multi-Asset Scalper Engine Cycle at ${new Date().toISOString()}`);
 
-  // Market Day Filter: Check UTC day of the week (0 = Sunday, 6 = Saturday)
+  // Market Day Filter: Per-symbol weekend check (Crypto 24/7, Forex/Indices/Gold pause on Sat/Sun)
   const currentUtcDay = new Date().getUTCDay();
-  if (currentUtcDay === 0 || currentUtcDay === 6) {
-    const weekendLog = 'Weekend detected: Bot sleeping';
-    console.log(weekendLog);
-    logs.push(weekendLog);
-    return {
-      success: true,
-      engine: '5m High-Frequency Scalper',
-      message: weekendLog,
-      processedAssets: 0,
-      results: [],
-      logs
-    };
-  }
+  const isWeekendNow = (currentUtcDay === 0 || currentUtcDay === 6);
+  logs.push(`Market Day Check: UTC day ${currentUtcDay} (Weekend: ${isWeekendNow}). Per-symbol weekend filtering active.`);
 
   let dbConnected = false;
   try {
@@ -90,17 +145,60 @@ async function runScalperEngine() {
         logs.push(`Evaluating ${pendingTrades.length} pending scalp trade(s)...`);
         for (const trade of pendingTrades) {
           const matchingItem = normalizeSymbol(trade.symbol);
+          if (isMarketWeekend(matchingItem.symbol)) {
+            logs.push(`[${matchingItem.symbol}] Market closed (weekend), skipping pending evaluation.`);
+            continue;
+          }
           const candles = await fetchAsset5mCandles(matchingItem.symbol, matchingItem.source);
           if (candles && candles.length > 0) {
-            const currentPrice = candles[candles.length - 1].close;
-            let newStatus: 'WIN' | 'LOSS' | null = null;
+            const currentCandle = candles[candles.length - 1];
+            const currentPrice = currentCandle.close;
+            const candleHigh = currentCandle.high !== undefined ? currentCandle.high : currentPrice;
+            const candleLow = currentCandle.low !== undefined ? currentCandle.low : currentPrice;
+            let newStatus: 'WIN' | 'LOSS' | 'BREAKEVEN' | null = null;
+            let exitPrice = currentPrice;
+
+            // HYBRID SAFETY NET LOGIC:
+            // 1. Hard Catastrophic Stop (Wick on High/Low): 3.0x ATR for Gold, 2.5x ATR for QQQ
+            // 2. Take Profit (Wick on High/Low): limit fill
+            // 3. Soft Stop (1.5x ATR): triggers ONLY on candle CLOSE
+            const isQQQ = matchingItem.symbol.includes('QQQ') || matchingItem.symbol.includes('IXIC');
+            const hardSlMult = isQQQ ? 2.5 : 3.0;
+            const atrVal = trade.atr || (Math.abs(trade.sl - trade.entryPrice) / 1.5);
+            const hardSl = trade.breakevenApplied
+              ? trade.entryPrice
+              : (trade.action === 'BUY' ? trade.entryPrice - (atrVal * hardSlMult) : trade.entryPrice + (atrVal * hardSlMult));
 
             if (trade.action === 'BUY') {
-              if (currentPrice >= trade.tp) newStatus = 'WIN';
-              else if (currentPrice <= trade.sl) newStatus = 'LOSS';
+              const hardSlHit = candleLow <= hardSl;
+              const tpHit = candleHigh >= trade.tp;
+              const softSlHit = currentPrice <= trade.sl; // Soft stop on candle CLOSE
+
+              if (hardSlHit) {
+                newStatus = 'LOSS';
+                exitPrice = hardSl;
+              } else if (tpHit) {
+                newStatus = 'WIN';
+                exitPrice = trade.tp;
+              } else if (softSlHit) {
+                newStatus = trade.breakevenApplied && Math.abs(trade.sl - trade.entryPrice) < 0.0001 ? 'BREAKEVEN' : 'LOSS';
+                exitPrice = trade.sl;
+              }
             } else if (trade.action === 'SELL') {
-              if (currentPrice <= trade.tp) newStatus = 'WIN';
-              else if (currentPrice >= trade.sl) newStatus = 'LOSS';
+              const hardSlHit = candleHigh >= hardSl;
+              const tpHit = candleLow <= trade.tp;
+              const softSlHit = currentPrice >= trade.sl; // Soft stop on candle CLOSE
+
+              if (hardSlHit) {
+                newStatus = 'LOSS';
+                exitPrice = hardSl;
+              } else if (tpHit) {
+                newStatus = 'WIN';
+                exitPrice = trade.tp;
+              } else if (softSlHit) {
+                newStatus = trade.breakevenApplied && Math.abs(trade.sl - trade.entryPrice) < 0.0001 ? 'BREAKEVEN' : 'LOSS';
+                exitPrice = trade.sl;
+              }
             }
 
             if (newStatus) {
@@ -114,7 +212,7 @@ async function runScalperEngine() {
                 action: trade.action,
                 tradeType: trade.tradeType,
                 entryPrice: trade.entryPrice,
-                exitPrice: currentPrice,
+                exitPrice,
                 sl: trade.sl,
                 tp: trade.tp,
                 status: newStatus,
@@ -133,33 +231,59 @@ async function runScalperEngine() {
 
               // Update active trade status to ARCHIVED so it's removed from pending list
               trade.status = 'ARCHIVED';
-              trade.exitPrice = currentPrice;
+              trade.exitPrice = exitPrice;
               trade.closedAt = closedAt;
               await trade.save();
 
               logs.push(`Scalp trade ${trade._id} (${trade.symbol}) archived with result ${newStatus}`);
 
               const outcomeText = newStatus === 'WIN'
-                ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(currentPrice)}`
-                : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(currentPrice)}`;
+                ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}`
+                : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}`;
               await sendTelegramNotification(outcomeText);
+
+              // Risk Alert: Check for 4+ consecutive losses today (Monitoring only, no automated execution)
+              if (newStatus === 'LOSS') {
+                try {
+                  const startOfDay = new Date();
+                  startOfDay.setUTCHours(0, 0, 0, 0);
+
+                  const recentToday = await TradeHistory.find({
+                    closedAt: { $gte: startOfDay }
+                  }).sort({ closedAt: -1 }).limit(10);
+
+                  let consecLosses = 0;
+                  for (const t of recentToday) {
+                    if (t.status === 'LOSS') consecLosses++;
+                    else break;
+                  }
+
+                  if (consecLosses >= 4) {
+                    const warningMsg = `⚠️ **تحذير إدارة المخاطر**: تم تسجيل ${consecLosses} خسائر متتالية اليوم!\nيرجى توخي الحذر ومتابعة حالة السوق.`;
+                    await sendTelegramNotification(warningMsg);
+                    logs.push(warningMsg);
+                  }
+                } catch (lossErr: any) {
+                  console.error('Error checking consecutive losses:', lossErr?.message || lossErr);
+                }
+              }
             } else {
               // -------------------------------------------------------------
               // Advanced Trade Management: Breakeven & Time Stop
               // -------------------------------------------------------------
 
-              // 1. Breakeven Logic (Move SL to Entry Price at >= 50% TP progress)
+              // 1. Breakeven Logic (Move SL to Entry Price at >= 50% TP progress based on High/Low)
               if (!trade.breakevenApplied) {
                 let is50PercentReached = false;
 
                 if (trade.action === 'BUY') {
                   const target50 = trade.entryPrice + 0.5 * (trade.tp - trade.entryPrice);
-                  if (currentPrice >= target50) {
+                  if (candleHigh >= target50) {
                     is50PercentReached = true;
                   }
                 } else if (trade.action === 'SELL') {
                   const target50 = trade.entryPrice - 0.5 * (trade.entryPrice - trade.tp);
-                  if (currentPrice <= target50) {
+                  if (candleLow <= target50) {
                     is50PercentReached = true;
                   }
                 }
@@ -244,10 +368,20 @@ async function runScalperEngine() {
     }
   }
 
-  // 2. Iterate through Scalp Watchlist Concurrently (Promise.allSettled)
-  const assetPromises = SCALP_WATCHLIST.map(async (item) => {
+  // 2. Filter active assets and iterate concurrently (Promise.allSettled)
+  const activeWatchlist = SCALP_WATCHLIST.filter(item => item.enabled);
+  logs.push(`Active Watchlist (${activeWatchlist.length} assets): ${activeWatchlist.map(a => a.symbol).join(', ')}`);
+
+  const assetPromises = activeWatchlist.map(async (item) => {
     const { symbol, source } = item;
     try {
+      if (isMarketWeekend(symbol)) {
+        const weekendMsg = `[${symbol}] Weekend detected: Market closed for this asset. Skipping.`;
+        console.log(weekendMsg);
+        logs.push(weekendMsg);
+        return { symbol, signalTriggered: false, skipped: true, reason: weekendMsg };
+      }
+
       if (dbConnected) {
         const activeTrade = await Trade.findOne({
           symbol: { $in: [symbol, symbol.replace('/', ''), symbol.replace('/', '-'), `^${symbol}`, symbol.replace('^', '')] },
@@ -305,11 +439,22 @@ async function runScalperEngine() {
         return { symbol, signalTriggered: false, close: currentClose, rsi: currentRsi, ema20: currentEma20, ema100: currentEma100, atr: currentAtr };
       }
 
+      // Session Filter Check
+      if (!isSessionAllowed(symbol)) {
+        const sessMsg = `[${symbol}] Outside allowed trading session. Skipping.`;
+        logs.push(sessMsg);
+        return { symbol, signalTriggered: false, skipped: true, reason: sessMsg };
+      }
+
       logs.push(`🚨 ${signalType} Scalp Signal Triggered for ${symbol}!`);
 
       // Dynamic Risk Management (ATR-based SL & TP)
-      // 2.0 * ATR for Forex pairs (quicker exits), 3.0 * ATR for Gold/Indices
-      const tpMultiplier = isForexPair(symbol) ? 2.0 : 3.0;
+      // QQQ: 2.0 * ATR, Forex: 2.0 * ATR, Gold/Crypto: 3.0 * ATR
+      const normSym = normalizeSymbol(symbol).symbol;
+      let tpMultiplier = 3.0;
+      if (normSym === 'QQQ' || isForexPair(symbol)) {
+        tpMultiplier = 2.0; // 2.0x ATR for QQQ and Forex
+      }
 
       const sl = signalType === 'BUY'
         ? currentClose - (currentAtr * 1.5)
@@ -369,7 +514,7 @@ async function runScalperEngine() {
     if (res.status === 'fulfilled') {
       return res.value;
     } else {
-      const symbol = SCALP_WATCHLIST[index]?.symbol || 'UNKNOWN';
+      const symbol = activeWatchlist[index]?.symbol || 'UNKNOWN';
       const errMsg = `Unhandled rejection for ${symbol}: ${res.reason?.message || res.reason}`;
       logs.push(errMsg);
       return { symbol, signalTriggered: false, error: errMsg };
@@ -379,7 +524,9 @@ async function runScalperEngine() {
   return {
     success: true,
     engine: '5m High-Frequency Scalper',
-    processedAssets: SCALP_WATCHLIST.length,
+    processedAssets: activeWatchlist.length,
+    activeAssets: activeWatchlist.map(a => a.symbol),
+    disabledAssets: SCALP_WATCHLIST.filter(a => !a.enabled).map(a => ({ symbol: a.symbol, reason: a.notes })),
     results,
     logs
   };

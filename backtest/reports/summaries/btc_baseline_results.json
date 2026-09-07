@@ -1,0 +1,103 @@
+{
+  "symbol": "BTC/USD",
+  "period": {
+    "start": "2026-07-08T00:00:00.000Z",
+    "end": "2026-09-05T11:27:57.000Z",
+    "totalCandles": 16860,
+    "days": 60
+  },
+  "metrics": {
+    "totalTrades": 507,
+    "winCount": 143,
+    "lossCount": 364,
+    "winRate": 28.2,
+    "netPoints": 1219.11,
+    "grossWinPoints": 32988.45,
+    "grossLossPoints": 31769.34,
+    "profitFactor": 1.04,
+    "avgWin": 230.69,
+    "avgLoss": 87.28,
+    "rewardRiskRealized": 2.64,
+    "maxDrawdown": 3019.08,
+    "realizedRR": 2.64,
+    "reqWinRate": 27.45,
+    "winRateEdge": 0.75
+  },
+  "exitReasons": {
+    "SL": 350,
+    "TP": 143,
+    "TIME_STOP_LOSS": 14
+  },
+  "byDay": {
+    "0": {
+      "dayIndex": 0,
+      "dayName": "الأحد",
+      "total": 65,
+      "wins": 20,
+      "losses": 45,
+      "netPoints": -33.25,
+      "winRate": 30.8
+    },
+    "1": {
+      "dayIndex": 1,
+      "dayName": "الاثنين",
+      "total": 58,
+      "wins": 20,
+      "losses": 38,
+      "netPoints": 370.62,
+      "winRate": 34.5
+    },
+    "2": {
+      "dayIndex": 2,
+      "dayName": "الثلاثاء",
+      "total": 65,
+      "wins": 16,
+      "losses": 49,
+      "netPoints": 202.87,
+      "winRate": 24.6
+    },
+    "3": {
+      "dayIndex": 3,
+      "dayName": "الأربعاء",
+      "total": 85,
+      "wins": 22,
+      "losses": 63,
+      "netPoints": 19.41,
+      "winRate": 25.9
+    },
+    "4": {
+      "dayIndex": 4,
+      "dayName": "الخميس",
+      "total": 76,
+      "wins": 23,
+      "losses": 53,
+      "netPoints": 752.64,
+      "winRate": 30.3
+    },
+    "5": {
+      "dayIndex": 5,
+      "dayName": "الجمعة",
+      "total": 73,
+      "wins": 21,
+      "losses": 52,
+      "netPoints": 40.77,
+      "winRate": 28.8
+    },
+    "6": {
+      "dayIndex": 6,
+      "dayName": "السبت",
+      "total": 85,
+      "wins": 21,
+      "losses": 64,
+      "netPoints": -133.95,
+      "winRate": 24.7
+    }
+  },
+  "weekendPerformance": {
+    "totalTrades": 150,
+    "saturdayTrades": 85,
+    "sundayTrades": 65,
+    "winRate": 27.3,
+    "netPnl": -167.2
+  }
+}

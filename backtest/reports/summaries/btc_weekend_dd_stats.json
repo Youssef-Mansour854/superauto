@@ -1,0 +1,246 @@
+{
+  "baselineAllStats": {
+    "label": "All Baseline (24/7)",
+    "totalTrades": 507,
+    "winCount": 143,
+    "lossCount": 364,
+    "winRate": 28.21,
+    "seWinRate": 2,
+    "ciWinRate95": [
+      24.29,
+      32.12
+    ],
+    "netPnL": 1219.11,
+    "grossWin": 32988.45,
+    "grossLoss": 31769.34,
+    "profitFactor": 1.038,
+    "avgWin": 230.69,
+    "avgLoss": 87.28,
+    "realizedRR": 2.64,
+    "breakevenWR": 27.45,
+    "meanPnL": 2.4,
+    "stdDev": 177.54,
+    "seMean": 7.88,
+    "maxDrawdown": 3019.08
+  },
+  "weekdayStats": {
+    "label": "Baseline Mon-Fri Only",
+    "totalTrades": 357,
+    "winCount": 102,
+    "lossCount": 255,
+    "winRate": 28.57,
+    "seWinRate": 2.39,
+    "ciWinRate95": [
+      23.89,
+      33.26
+    ],
+    "netPnL": 1386.31,
+    "grossWin": 27390.18,
+    "grossLoss": 26003.87,
+    "profitFactor": 1.053,
+    "avgWin": 268.53,
+    "avgLoss": 101.98,
+    "realizedRR": 2.63,
+    "breakevenWR": 27.52,
+    "meanPnL": 3.88,
+    "stdDev": 197.63,
+    "seMean": 10.46,
+    "maxDrawdown": 3015.85
+  },
+  "weekendStats": {
+    "label": "Baseline Sat-Sun Only",
+    "totalTrades": 150,
+    "winCount": 41,
+    "lossCount": 109,
+    "winRate": 27.33,
+    "seWinRate": 3.64,
+    "ciWinRate95": [
+      20.2,
+      34.47
+    ],
+    "netPnL": -167.2,
+    "grossWin": 5598.27,
+    "grossLoss": 5765.47,
+    "profitFactor": 0.971,
+    "avgWin": 136.54,
+    "avgLoss": 52.89,
+    "realizedRR": 2.58,
+    "breakevenWR": 27.92,
+    "meanPnL": -1.11,
+    "stdDev": 117.09,
+    "seMean": 9.56,
+    "maxDrawdown": 846.81
+  },
+  "simulations": {
+    "simA_skipCandles": {
+      "label": "Dynamic Simulation: SKIP_CANDLES",
+      "totalTrades": 357,
+      "winCount": 102,
+      "lossCount": 255,
+      "winRate": 28.57,
+      "seWinRate": 2.39,
+      "ciWinRate95": [
+        23.89,
+        33.26
+      ],
+      "netPnL": 1445.52,
+      "grossWin": 27497.66,
+      "grossLoss": 26052.14,
+      "profitFactor": 1.055,
+      "avgWin": 269.58,
+      "avgLoss": 102.17,
+      "realizedRR": 2.64,
+      "breakevenWR": 27.48,
+      "meanPnL": 4.05,
+      "stdDev": 197.87,
+      "seMean": 10.47,
+      "maxDrawdown": 3015.85
+    },
+    "simB_noNewEntries": {
+      "label": "Dynamic Simulation: NO_NEW_ENTRIES",
+      "totalTrades": 358,
+      "winCount": 102,
+      "lossCount": 256,
+      "winRate": 28.49,
+      "seWinRate": 2.39,
+      "ciWinRate95": [
+        23.82,
+        33.17
+      ],
+      "netPnL": 1386.31,
+      "grossWin": 27390.18,
+      "grossLoss": 26003.87,
+      "profitFactor": 1.053,
+      "avgWin": 268.53,
+      "avgLoss": 101.58,
+      "realizedRR": 2.64,
+      "breakevenWR": 27.45,
+      "meanPnL": 3.87,
+      "stdDev": 197.35,
+      "seMean": 10.43,
+      "maxDrawdown": 3015.85
+    },
+    "simC_fridayClose": {
+      "label": "Dynamic Simulation: FRIDAY_CLOSE",
+      "totalTrades": 358,
+      "winCount": 105,
+      "lossCount": 253,
+      "winRate": 29.33,
+      "seWinRate": 2.41,
+      "ciWinRate95": [
+        24.61,
+        34.05
+      ],
+      "netPnL": 1578.48,
+      "grossWin": 27562.57,
+      "grossLoss": 25984.09,
+      "profitFactor": 1.061,
+      "avgWin": 262.5,
+      "avgLoss": 102.7,
+      "realizedRR": 2.56,
+      "breakevenWR": 28.12,
+      "meanPnL": 4.41,
+      "stdDev": 197.43,
+      "seMean": 10.43,
+      "maxDrawdown": 3015.85
+    }
+  },
+  "drawdownAnalysis": {
+    "maxDD": 3019.079999999999,
+    "peakTrade": {
+      "tradeNumber": 372,
+      "exitTime": "2026-08-21T05:10:00.000Z",
+      "equity": 3860.4399999999996
+    },
+    "troughTrade": {
+      "tradeNumber": 430,
+      "exitTime": "2026-08-27T11:35:00.000Z",
+      "equity": 841.3600000000007
+    },
+    "recoveryTrade": "Never recovered before end of test",
+    "durationDays": 6.27,
+    "tradesCountInDD": 58,
+    "winsInDD": 12,
+    "lossesInDD": 46,
+    "winRateInDD": 20.7,
+    "maxConsecLossesInDD": 9,
+    "maxConsecLossesGlobal": 13,
+    "otherMajorDrawdowns": [
+      {
+        "peakIdx": 371,
+        "peakTime": "2026-08-21T05:10:00.000Z",
+        "troughIdx": 429,
+        "troughTime": "2026-08-27T11:35:00.000Z",
+        "recoverIdx": null,
+        "recoverTime": "Not recovered by end of backtest",
+        "ddAmount": 3019.079999999999,
+        "durationDays": 6.267361111111111,
+        "recoveryDays": null
+      },
+      {
+        "peakIdx": 71,
+        "peakTime": "2026-07-17T13:05:00.000Z",
+        "troughIdx": 133,
+        "troughTime": "2026-07-24T02:40:00.000Z",
+        "recoverIdx": 177,
+        "recoverTime": "2026-07-29T16:40:00.000Z",
+        "ddAmount": 2133.45,
+        "durationDays": 6.565972222222222,
+        "recoveryDays": 12.149305555555555
+      },
+      {
+        "peakIdx": 240,
+        "peakTime": "2026-08-05T19:00:00.000Z",
+        "troughIdx": 306,
+        "troughTime": "2026-08-13T10:00:00.000Z",
+        "recoverIdx": 364,
+        "recoverTime": "2026-08-20T08:05:00.000Z",
+        "ddAmount": 2101.980000000001,
+        "durationDays": 7.625,
+        "recoveryDays": 14.54513888888889
+      },
+      {
+        "peakIdx": 1,
+        "peakTime": "2026-07-08T13:25:00.000Z",
+        "troughIdx": 13,
+        "troughTime": "2026-07-09T16:20:00.000Z",
+        "recoverIdx": 67,
+        "recoverTime": "2026-07-16T23:15:00.000Z",
+        "ddAmount": 1081.92,
+        "durationDays": 1.1215277777777777,
+        "recoveryDays": 8.409722222222221
+      }
+    ]
+  },
+  "statisticalTests": {
+    "winRateComparison": {
+      "weekdayWR": 28.57,
+      "weekendWR": 27.33,
+      "diffWR": 1.24,
+      "zScore": 0.283,
+      "pValue": 0.7774,
+      "isSignificant": false
+    },
+    "meanPnLComparison": {
+      "weekdayMeanPnL": 3.88,
+      "weekendMeanPnL": -1.11,
+      "tStat": 0.352,
+      "pValue": 0.7247,
+      "isSignificant": false
+    },
+    "bootstrapPF": {
+      "baseline": {
+        "low2_5": 0.81,
+        "median": 1.04,
+        "high97_5": 1.31,
+        "probPfAbove1": 61.7
+      },
+      "weekday": {
+        "low2_5": 0.8,
+        "median": 1.05,
+        "high97_5": 1.37,
+        "probPfAbove1": 65
+      }
+    }
+  }
+}

@@ -1,0 +1,90 @@
+[
+  {
+    "tpMultiplier": 2,
+    "totalTrades": 422,
+    "winCount": 129,
+    "lossCount": 293,
+    "winRate": 30.6,
+    "netPips": -56.6,
+    "grossWinPips": 544.05,
+    "grossLossPips": 600.65,
+    "profitFactor": 0.91,
+    "maxDrawdown": 77.37,
+    "avgWin": 4.22,
+    "avgLoss": 2.05,
+    "realizedRR": 2.06,
+    "reqWinRate": 32.7,
+    "winRateEdge": -2.1,
+    "exitReasons": {
+      "SL": 286,
+      "TP": 129,
+      "TIME_STOP_LOSS": 7
+    }
+  },
+  {
+    "tpMultiplier": 2.5,
+    "totalTrades": 411,
+    "winCount": 110,
+    "lossCount": 301,
+    "winRate": 26.8,
+    "netPips": -47.72,
+    "grossWinPips": 587.04,
+    "grossLossPips": 634.76,
+    "profitFactor": 0.92,
+    "maxDrawdown": 74.44,
+    "avgWin": 5.34,
+    "avgLoss": 2.11,
+    "realizedRR": 2.53,
+    "reqWinRate": 28.32,
+    "winRateEdge": -1.52,
+    "exitReasons": {
+      "SL": 293,
+      "TP": 110,
+      "TIME_STOP_LOSS": 8
+    }
+  },
+  {
+    "tpMultiplier": 3,
+    "totalTrades": 396,
+    "winCount": 91,
+    "lossCount": 305,
+    "winRate": 23,
+    "netPips": -40.02,
+    "grossWinPips": 592.54,
+    "grossLossPips": 632.56,
+    "profitFactor": 0.94,
+    "maxDrawdown": 73.4,
+    "avgWin": 6.51,
+    "avgLoss": 2.07,
+    "realizedRR": 3.14,
+    "reqWinRate": 24.13,
+    "winRateEdge": -1.13,
+    "exitReasons": {
+      "SL": 296,
+      "TP": 91,
+      "TIME_STOP_LOSS": 9
+    }
+  },
+  {
+    "tpMultiplier": 3.5,
+    "totalTrades": 387,
+    "winCount": 80,
+    "lossCount": 307,
+    "winRate": 20.7,
+    "netPips": -69.29,
+    "grossWinPips": 600.82,
+    "grossLossPips": 670.11,
+    "profitFactor": 0.9,
+    "maxDrawdown": 80.27,
+    "avgWin": 7.51,
+    "avgLoss": 2.18,
+    "realizedRR": 3.44,
+    "reqWinRate": 22.5,
+    "winRateEdge": -1.8,
+    "exitReasons": {
+      "SL": 297,
+      "TP": 80,
+      "TIME_STOP_LOSS": 10
+    }
+  }
+]

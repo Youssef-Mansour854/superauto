@@ -9,7 +9,7 @@ export interface ITradeHistory extends Document {
   exitPrice: number;
   sl: number;
   tp: number;
-  status: 'WIN' | 'LOSS';
+  status: 'WIN' | 'LOSS' | 'BREAKEVEN';
   rsi?: number;
   ema20?: number;
   ema100?: number;
@@ -37,7 +37,7 @@ const TradeHistorySchema: Schema = new Schema<ITradeHistory>({
   exitPrice: { type: Number, required: true },
   sl: { type: Number, required: true },
   tp: { type: Number, required: true },
-  status: { type: String, enum: ['WIN', 'LOSS'], required: true, index: true },
+  status: { type: String, enum: ['WIN', 'LOSS', 'BREAKEVEN'], required: true, index: true },
   rsi: { type: Number },
   ema20: { type: Number },
   ema100: { type: Number },

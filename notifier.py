@@ -31,7 +31,7 @@ logger = logging.getLogger("TradingNotifier")
 load_dotenv()
 
 # Watchlist symbols formatted for Yahoo Finance
-WATCHLIST_SYMBOLS = ["GC=F", "EURUSD=X", "BTC-USD"]
+WATCHLIST_SYMBOLS = ["GC=F", "EURUSD=X"] # BTC-USD strictly removed after failing quantitative backtests
 
 
 def fetch_market_data(symbol: str, timeframe: str = "15m", limit: int = 500) -> Optional[pd.DataFrame]:
