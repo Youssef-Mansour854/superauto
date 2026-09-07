@@ -449,9 +449,9 @@ async function runScalperEngine() {
       logs.push(`🚨 ${signalType} Scalp Signal Triggered for ${symbol}!`);
 
       // Dynamic Risk Management (ATR-based SL & TP)
-      // QQQ: 2.0 * ATR, Forex: 2.0 * ATR, Gold/Crypto: 3.0 * ATR
+      // 2.0 * ATR Take Profit across assets
       const normSym = normalizeSymbol(symbol).symbol;
-      let tpMultiplier = 3.0;
+      let tpMultiplier = 2.0;
       if (normSym === 'QQQ' || isForexPair(symbol)) {
         tpMultiplier = 2.0; // 2.0x ATR for QQQ and Forex
       }
