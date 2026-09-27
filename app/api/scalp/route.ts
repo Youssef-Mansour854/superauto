@@ -272,23 +272,24 @@ async function runScalperEngine() {
               // Advanced Trade Management: Breakeven & Time Stop
               // -------------------------------------------------------------
 
-              // 1. Breakeven Logic (Move SL to Entry Price at >= 50% TP progress based on High/Low)
+              // 1. Breakeven Logic (Move SL to Entry Price at >= 60% TP progress for Gold, 50% for others)
               if (!trade.breakevenApplied) {
-                let is50PercentReached = false;
+                const beRatio = matchingItem.symbol === 'XAU/USD' ? 0.6 : 0.5;
+                let isBeReached = false;
 
                 if (trade.action === 'BUY') {
-                  const target50 = trade.entryPrice + 0.5 * (trade.tp - trade.entryPrice);
-                  if (candleHigh >= target50) {
-                    is50PercentReached = true;
+                  const targetBe = trade.entryPrice + beRatio * (trade.tp - trade.entryPrice);
+                  if (candleHigh >= targetBe) {
+                    isBeReached = true;
                   }
                 } else if (trade.action === 'SELL') {
-                  const target50 = trade.entryPrice - 0.5 * (trade.entryPrice - trade.tp);
-                  if (candleLow <= target50) {
-                    is50PercentReached = true;
+                  const targetBe = trade.entryPrice - beRatio * (trade.entryPrice - trade.tp);
+                  if (candleLow <= targetBe) {
+                    isBeReached = true;
                   }
                 }
 
-                if (is50PercentReached) {
+                if (isBeReached) {
                   trade.sl = trade.entryPrice;
                   trade.breakevenApplied = true;
                   await trade.save();

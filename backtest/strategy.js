@@ -19,13 +19,14 @@ const DEFAULT_CONFIG = {
   // SL / TP multipliers
   slAtrMultiplier: 1.5,
   tpAtrMultiplierForex: 2.0, // EUR/USD
-  tpAtrMultiplierGold: 3.0,  // XAU/USD
+  tpAtrMultiplierGold: 2.0,  // XAU/USD (matches live 2.0x ATR)
   tpAtrMultiplierQQQ: 2.0,   // QQQ
   hardSlMultiplierGold: 3.0, // Hard stop on High/Low wick for Gold
   hardSlMultiplierQQQ: 2.5,  // Hard stop on High/Low wick for QQQ
 
   // Trade management
-  breakevenThreshold: 0.5,   // Move SL to entry at 50% TP distance
+  breakevenThreshold: 0.5,       // Move SL to entry at 50% TP distance (default for Forex/QQQ)
+  breakevenThresholdGold: 0.6,   // Move SL to entry at 60% TP distance for Gold
   timeStopCandles: 24,       // 120 minutes / 5 = 24 candles
   weekendFilter: true,       // Skip Saturday/Sunday
 
@@ -400,10 +401,14 @@ function evaluateTradeManagement(trade, currentCandle, candlesHeld, config = DEF
 
   if (closed) return { closed: true, status, exitPrice, exitReason, breakevenApplied: trade.breakevenApplied };
 
-  // 2. Breakeven Logic (Move SL to Entry Price at >= 50% TP progress based on High/Low)
+  // 2. Breakeven Logic (Move SL to Entry Price at >= 60% TP progress for Gold, 50% for others)
   if (!trade.breakevenApplied) {
+    const isGold = normSym === 'XAU/USD';
+    const beRatio = config.breakevenThresholdRatio !== undefined
+      ? config.breakevenThresholdRatio
+      : (isGold ? (config.breakevenThresholdGold !== undefined ? config.breakevenThresholdGold : 0.6) : (config.breakevenThreshold !== undefined ? config.breakevenThreshold : 0.5));
     const tpDistance = Math.abs(trade.tp - trade.entryPrice);
-    const beTriggerDist = tpDistance * (config.breakevenThresholdRatio || 0.5);
+    const beTriggerDist = tpDistance * beRatio;
     if (trade.action === 'BUY' && candleHigh >= (trade.entryPrice + beTriggerDist)) {
       trade.sl = trade.entryPrice;
       trade.breakevenApplied = true;
