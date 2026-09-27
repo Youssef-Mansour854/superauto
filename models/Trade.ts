@@ -15,6 +15,9 @@ export interface ITrade extends Document {
   sma50?: number;
   macd?: number;
   tradeType: 'SCALP' | 'SWING';
+  suggestedLotSize?: number;
+  pnlPoints?: number;
+  pnlUSD?: number;
   newsHeadlines?: string[];
   groqAnalysis?: string;
   status: 'ALERT_SENT' | 'WIN' | 'LOSS' | 'ARCHIVED';
@@ -38,6 +41,9 @@ const TradeSchema: Schema = new Schema<ITrade>({
   sma50: { type: Number },
   macd: { type: Number },
   tradeType: { type: String, enum: ['SCALP', 'SWING'], default: 'SCALP', required: true, index: true },
+  suggestedLotSize: { type: Number },
+  pnlPoints: { type: Number },
+  pnlUSD: { type: Number },
   newsHeadlines: [{ type: String }],
   groqAnalysis: { type: String },
   status: { type: String, enum: ['ALERT_SENT', 'WIN', 'LOSS', 'ARCHIVED'], default: 'ALERT_SENT', index: true },

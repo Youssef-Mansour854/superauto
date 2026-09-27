@@ -10,6 +10,9 @@ export interface ITradeHistory extends Document {
   sl: number;
   tp: number;
   status: 'WIN' | 'LOSS' | 'BREAKEVEN';
+  suggestedLotSize?: number;
+  pnlPoints?: number;
+  pnlUSD?: number;
   rsi?: number;
   ema20?: number;
   ema100?: number;
@@ -38,6 +41,9 @@ const TradeHistorySchema: Schema = new Schema<ITradeHistory>({
   sl: { type: Number, required: true },
   tp: { type: Number, required: true },
   status: { type: String, enum: ['WIN', 'LOSS', 'BREAKEVEN'], required: true, index: true },
+  suggestedLotSize: { type: Number },
+  pnlPoints: { type: Number },
+  pnlUSD: { type: Number },
   rsi: { type: Number },
   ema20: { type: Number },
   ema100: { type: Number },

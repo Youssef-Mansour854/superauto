@@ -42,3 +42,10 @@ data/*.json
 # Backtest runtime console logs & audits
 backtest_console.txt
 readiness_audit_output.json
+
+# Locally generated trade exports
+/*_trades_*.csv
+/*_trades_*.json
+/trades_*.csv
+/trades_*.json
+/archive/exports/

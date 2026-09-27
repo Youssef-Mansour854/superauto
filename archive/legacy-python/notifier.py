@@ -347,12 +347,23 @@ def format_signal_message(signal: Dict[str, Any]) -> str:
     symbol = signal["symbol"]
     strategy_name = signal.get("strategy_name", "Standard")
 
+    entry = signal['entry_price']
+    sl = signal['sl']
+    sl_dist = abs(entry - sl)
+    contract_size = 100 if ("GC" in symbol or "XAU" in symbol) else 1
+    balance = float(os.getenv("ACCOUNT_BALANCE", "10000"))
+    risk_pct = float(os.getenv("RISK_PERCENT", "1.0"))
+    risk_usd = balance * (risk_pct / 100.0)
+    loss_per_lot = sl_dist * contract_size if sl_dist > 0 else 1.0
+    lot_size = max(0.01, round(risk_usd / loss_per_lot, 2)) if loss_per_lot > 0 else 0.01
+
     message = (
         f"🚨 <b>TRADING SIGNAL ALERT</b> 🚨\n\n"
         f"<b>Strategy:</b> {strategy_name}\n"
         f"<b>Asset Symbol:</b> {symbol}\n"
         f"<b>Signal Type:</b> {action_icon}\n"
-        f"<b>Entry Price:</b> ${signal['entry_price']:,.4f}\n\n"
+        f"<b>Entry Price:</b> ${signal['entry_price']:,.4f}\n"
+        f"📏 <b>حجم الصفقة المقترح:</b> {lot_size:.2f} لوت\n\n"
         f"🛡 <b>Stop Loss (SL):</b> ${signal['sl']:,.4f}\n"
         f"🎯 <b>Take Profit (TP):</b> ${signal['tp']:,.4f}\n"
         f"<b>Risk:Reward Ratio:</b> 1:{signal['risk_reward']}\n\n"
