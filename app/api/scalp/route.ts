@@ -11,6 +11,7 @@ import { sendTelegramNotification } from '@/lib/telegram';
 import {
   calculatePositionSize,
   calculatePnLUSD,
+  calculateDetailedPnL,
   getSymbolSpec,
   getLiveAccountBalance,
   getLiveRiskPercent
@@ -334,15 +335,18 @@ async function runScalperEngine() {
               const closedAt = new Date();
               const indExit = candles.length >= 100 ? calculateScalpIndicators(candles) : null;
 
-              // Calculate pnlPoints and pnlUSD
+              // Calculate pnlPoints and detailed PnL with trading fees (Spread + Slippage + Commission)
               const rawDiff = trade.action === 'BUY' ? (exitPrice - trade.entryPrice) : (trade.entryPrice - exitPrice);
               const pnlPoints = Number(rawDiff.toFixed(2));
               const spec = getSymbolSpec(trade.symbol);
               const lotSize = trade.suggestedLotSize || calculatePositionSize(trade.entryPrice, trade.sl, currentLiveBal, undefined, spec.contractSize).lotSize;
-              const pnlUSD = newStatus === 'BREAKEVEN' ? 0 : calculatePnLUSD(pnlPoints, lotSize, spec.contractSize);
+              const pnlBreakdown = calculateDetailedPnL(pnlPoints, lotSize, trade.symbol, newStatus === 'BREAKEVEN');
+              const netPnLUSD = pnlBreakdown.netPnLUSD;
+              const grossPnLUSD = pnlBreakdown.grossPnLUSD;
+              const tradingFeeUSD = pnlBreakdown.tradingFeeUSD;
 
-              // Update account balance dynamically in database
-              const accountUpdate = await applyTradeResultToAccount(pnlUSD, newStatus, trade._id.toString());
+              // Update account balance dynamically in database using netPnLUSD
+              const accountUpdate = await applyTradeResultToAccount(netPnLUSD, newStatus, trade._id.toString());
               const updatedBal = accountUpdate.newBalance;
               currentLiveBal = updatedBal;
 
@@ -359,7 +363,10 @@ async function runScalperEngine() {
                 status: newStatus,
                 suggestedLotSize: lotSize,
                 pnlPoints,
-                pnlUSD,
+                pnlUSD: netPnLUSD,
+                grossPnLUSD,
+                tradingFeeUSD,
+                netPnLUSD,
                 balanceAfterTrade: updatedBal,
                 rsi: trade.rsi,
                 ema20: trade.ema20,
@@ -379,20 +386,24 @@ async function runScalperEngine() {
               trade.exitPrice = exitPrice;
               trade.suggestedLotSize = lotSize;
               trade.pnlPoints = pnlPoints;
-              trade.pnlUSD = pnlUSD;
+              trade.pnlUSD = netPnLUSD;
+              trade.grossPnLUSD = grossPnLUSD;
+              trade.tradingFeeUSD = tradingFeeUSD;
+              trade.netPnLUSD = netPnLUSD;
               trade.balanceAfterTrade = updatedBal;
               trade.closedAt = closedAt;
               await trade.save();
 
-              logs.push(`Scalp trade ${trade._id} (${trade.symbol}) archived with result ${newStatus} (PnL: $${pnlUSD} / ${pnlPoints} pts) | Balance after trade: $${updatedBal.toFixed(2)}`);
+              logs.push(`Scalp trade ${trade._id} (${trade.symbol}) archived with result ${newStatus} (Net PnL: $${netPnLUSD} | Fee: -$${tradingFeeUSD} | Points: ${pnlPoints}) | Balance: $${updatedBal.toFixed(2)}`);
 
-              const pnlPrefix = pnlUSD > 0 ? '+' : '';
-              const balanceText = `\n🏦 **رصيد الحساب الآن:** $${updatedBal.toFixed(2)} (${pnlPrefix}$${pnlUSD.toFixed(2)})`;
+              const pnlPrefix = netPnLUSD > 0 ? '+' : '';
+              const feeText = tradingFeeUSD > 0 ? `\n📉 تكلفة التداول (سبريد وانزلاق): -$${tradingFeeUSD.toFixed(2)}` : '';
+              const balanceText = `\n🏦 **رصيد الحساب الآن:** $${updatedBal.toFixed(2)} (${pnlPrefix}$${netPnLUSD.toFixed(2)})`;
               const outcomeText = newStatus === 'WIN'
-                ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: ${pnlPrefix}$${pnlUSD} (${pnlPrefix}${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${balanceText}`
+                ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة الصافية: ${pnlPrefix}$${netPnLUSD.toFixed(2)} (${pnlPoints > 0 ? '+' : ''}${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}${balanceText}`
                 : (newStatus === 'BREAKEVEN'
-                  ? `🛡️ **خروج على نقطة التعادل! (BREAKEVEN)** ⚖️\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: $0.00 | الحجم: ${lotSize.toFixed(2)} لوت${balanceText}`
-                  : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: -$${Math.abs(pnlUSD)} (${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${balanceText}`);
+                  ? `🛡️ **خروج على نقطة التعادل! (BREAKEVEN)** ⚖️\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: -$${tradingFeeUSD.toFixed(2)} (تكلفة السبريد) | الحجم: ${lotSize.toFixed(2)} لوت${balanceText}`
+                  : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة الصافية: -$${Math.abs(netPnLUSD).toFixed(2)} (${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}${balanceText}`);
               await sendTelegramNotification(outcomeText);
 
               // Risk Alert: Check for 4+ consecutive losses today (Monitoring only, no automated execution)
@@ -483,10 +494,13 @@ async function runScalperEngine() {
                   const pnlPoints = Number(rawDiff.toFixed(2));
                   const spec = getSymbolSpec(trade.symbol);
                   const lotSize = trade.suggestedLotSize || calculatePositionSize(trade.entryPrice, trade.sl, currentLiveBal, undefined, spec.contractSize).lotSize;
-                  const pnlUSD = calculatePnLUSD(pnlPoints, lotSize, spec.contractSize);
+                  const pnlBreakdown = calculateDetailedPnL(pnlPoints, lotSize, trade.symbol, false);
+                  const netPnLUSD = pnlBreakdown.netPnLUSD;
+                  const grossPnLUSD = pnlBreakdown.grossPnLUSD;
+                  const tradingFeeUSD = pnlBreakdown.tradingFeeUSD;
 
-                  // Update account balance dynamically in database
-                  const accountUpdate = await applyTradeResultToAccount(pnlUSD, 'LOSS', trade._id.toString());
+                  // Update account balance dynamically in database using netPnLUSD
+                  const accountUpdate = await applyTradeResultToAccount(netPnLUSD, 'LOSS', trade._id.toString());
                   const updatedBal = accountUpdate.newBalance;
                   currentLiveBal = updatedBal;
 
@@ -502,7 +516,10 @@ async function runScalperEngine() {
                     status: 'LOSS',
                     suggestedLotSize: lotSize,
                     pnlPoints,
-                    pnlUSD,
+                    pnlUSD: netPnLUSD,
+                    grossPnLUSD,
+                    tradingFeeUSD,
+                    netPnLUSD,
                     balanceAfterTrade: updatedBal,
                     rsi: trade.rsi,
                     ema20: trade.ema20,
@@ -521,12 +538,16 @@ async function runScalperEngine() {
                   trade.exitPrice = currentPrice;
                   trade.suggestedLotSize = lotSize;
                   trade.pnlPoints = pnlPoints;
-                  trade.pnlUSD = pnlUSD;
+                  trade.pnlUSD = netPnLUSD;
+                  trade.grossPnLUSD = grossPnLUSD;
+                  trade.tradingFeeUSD = tradingFeeUSD;
+                  trade.netPnLUSD = netPnLUSD;
                   trade.balanceAfterTrade = updatedBal;
                   trade.closedAt = closedAt;
                   await trade.save();
 
-                  const timeStopMsg = `⏱️ (TIME STOP) 120m limit reached while in loss.\nالرمز: ${trade.symbol}\nسعر الإغلاق: $${formatPrice(currentPrice)}\n💰 النتيجة: -$${Math.abs(pnlUSD)} (${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت\n🏦 **رصيد الحساب الآن:** $${updatedBal.toFixed(2)} (-$${Math.abs(pnlUSD).toFixed(2)})`;
+                  const feeText = tradingFeeUSD > 0 ? `\n📉 تكلفة التداول (سبريد وانزلاق): -$${tradingFeeUSD.toFixed(2)}` : '';
+                  const timeStopMsg = `⏱️ (TIME STOP) 120m limit reached while in loss.\nالرمز: ${trade.symbol}\nسعر الإغلاق: $${formatPrice(currentPrice)}\n💰 النتيجة الصافية: -$${Math.abs(netPnLUSD).toFixed(2)} (${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}\n🏦 **رصيد الحساب الآن:** $${updatedBal.toFixed(2)} (-$${Math.abs(netPnLUSD).toFixed(2)})`;
                   logs.push(timeStopMsg);
                   console.log(timeStopMsg);
                   await sendTelegramNotification(timeStopMsg);

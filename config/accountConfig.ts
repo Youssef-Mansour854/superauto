@@ -35,17 +35,22 @@ export interface SymbolSpec {
   minLot: number;
   maxLot: number;
   lotStep: number;
+  estimatedSpreadPoints: number;   // فارق السبريد بالنقاط
+  estimatedSlippagePoints: number; // الانزلاق السعري التقديري
+  commissionPerLotUSD: number;     // عمولة اللوت الكامل (0 لحساب Standard)
 }
 
 export const SYMBOL_SPECS: Record<string, SymbolSpec> = {
   'XAU/USD': {
-    // ⚠️ PLACEHOLDER - يحتاج تحديث: مواصفات الذهب من البروكر في MT5
     contractSize: CONTRACT_SIZE, // 100
     tickValue: TICK_VALUE,       // 1.0
     tickSize: TICK_SIZE,         // 0.01
     minLot: 0.01,
     maxLot: 50.0,
-    lotStep: 0.01
+    lotStep: 0.01,
+    estimatedSpreadPoints: 0.25,   // 0.25$ فارق سبريد الذهب المعتاد
+    estimatedSlippagePoints: 0.05, // 0.05$ انزلاق سعري تقديري
+    commissionPerLotUSD: 0.0       // 0$ لحساب Standard (قابل للتعديل عبر env COMMISSION_PER_LOT)
   },
   'QQQ': {
     // Placeholder for Nasdaq ETF / CFDs
@@ -54,7 +59,10 @@ export const SYMBOL_SPECS: Record<string, SymbolSpec> = {
     tickSize: 0.01,
     minLot: 0.01,
     maxLot: 100.0,
-    lotStep: 0.01
+    lotStep: 0.01,
+    estimatedSpreadPoints: 0.05,
+    estimatedSlippagePoints: 0.02,
+    commissionPerLotUSD: 0.0
   },
   'EUR/USD': {
     // Standard Forex Lot
@@ -63,7 +71,10 @@ export const SYMBOL_SPECS: Record<string, SymbolSpec> = {
     tickSize: 0.00001,
     minLot: 0.01,
     maxLot: 100.0,
-    lotStep: 0.01
+    lotStep: 0.01,
+    estimatedSpreadPoints: 0.00012, // 1.2 pips
+    estimatedSlippagePoints: 0.00003, // 0.3 pips
+    commissionPerLotUSD: 0.0
   }
 };
 
@@ -201,6 +212,57 @@ export function calculatePositionSize(
     accountBalance,
     hasRiskWarning,
     riskWarningMessage
+  };
+}
+
+export interface PnLBreakdown {
+  grossPnLUSD: number;
+  tradingFeeUSD: number;
+  netPnLUSD: number;
+  spreadCostUSD: number;
+  slippageCostUSD: number;
+  commissionUSD: number;
+}
+
+/**
+ * دالة مساعدة لحساب الربح أو الخسارة بالدولار مع احتساب تكاليف التداول (السبريد والعمولة والانزلاق):
+ * - Gross PnL: الربح الإجمالي النظري المباشر من حركة السعر
+ * - Trading Fee: مجموع السبريد + الانزلاق + عمولة البروكر
+ * - Net PnL: الربح الصافي الفعلي بعد خصم كل التكاليف (المطابق لـ MT5)
+ */
+export function calculateDetailedPnL(
+  pnlPoints: number,
+  lotSize: number,
+  symbol: string,
+  isBreakeven: boolean = false
+): PnLBreakdown {
+  const spec = getSymbolSpec(symbol);
+  const contractSize = spec.contractSize;
+
+  // 1. Gross PnL (الربح الإجمالي النظري)
+  const grossPnLUSD = isBreakeven ? 0 : Number((pnlPoints * lotSize * contractSize).toFixed(2));
+
+  // 2. تكاليف التداول (السبريد + الانزلاق + العمولة)
+  const envCommission = process.env.COMMISSION_PER_LOT ? parseFloat(process.env.COMMISSION_PER_LOT) : spec.commissionPerLotUSD;
+  const envSpread = process.env.ESTIMATED_SPREAD_POINTS ? parseFloat(process.env.ESTIMATED_SPREAD_POINTS) : spec.estimatedSpreadPoints;
+
+  const spreadCostUSD = Number((envSpread * lotSize * contractSize).toFixed(2));
+  const slippageCostUSD = Number((spec.estimatedSlippagePoints * lotSize * contractSize).toFixed(2));
+  const commissionUSD = Number((envCommission * lotSize).toFixed(2));
+
+  const tradingFeeUSD = Number((spreadCostUSD + slippageCostUSD + commissionUSD).toFixed(2));
+
+  // 3. Net PnL (الربح الصافي الفعلي)
+  // في صفقات التعادل: تكون النتيجة سالب تكلفة السبريد والعمولة فقط (-0.30$)
+  const netPnLUSD = Number((grossPnLUSD - tradingFeeUSD).toFixed(2));
+
+  return {
+    grossPnLUSD,
+    tradingFeeUSD,
+    netPnLUSD,
+    spreadCostUSD,
+    slippageCostUSD,
+    commissionUSD
   };
 }
 
