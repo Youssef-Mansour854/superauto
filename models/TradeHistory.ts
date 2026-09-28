@@ -13,6 +13,7 @@ export interface ITradeHistory extends Document {
   suggestedLotSize?: number;
   pnlPoints?: number;
   pnlUSD?: number;
+  balanceAfterTrade?: number;
   rsi?: number;
   ema20?: number;
   ema100?: number;
@@ -44,6 +45,7 @@ const TradeHistorySchema: Schema = new Schema<ITradeHistory>({
   suggestedLotSize: { type: Number },
   pnlPoints: { type: Number },
   pnlUSD: { type: Number },
+  balanceAfterTrade: { type: Number },
   rsi: { type: Number },
   ema20: { type: Number },
   ema100: { type: Number },

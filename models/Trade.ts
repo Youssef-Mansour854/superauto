@@ -18,6 +18,7 @@ export interface ITrade extends Document {
   suggestedLotSize?: number;
   pnlPoints?: number;
   pnlUSD?: number;
+  balanceAfterTrade?: number;
   newsHeadlines?: string[];
   groqAnalysis?: string;
   status: 'ALERT_SENT' | 'WIN' | 'LOSS' | 'ARCHIVED';
@@ -44,6 +45,7 @@ const TradeSchema: Schema = new Schema<ITrade>({
   suggestedLotSize: { type: Number },
   pnlPoints: { type: Number },
   pnlUSD: { type: Number },
+  balanceAfterTrade: { type: Number },
   newsHeadlines: [{ type: String }],
   groqAnalysis: { type: String },
   status: { type: String, enum: ['ALERT_SENT', 'WIN', 'LOSS', 'ARCHIVED'], default: 'ALERT_SENT', index: true },

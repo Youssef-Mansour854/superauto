@@ -15,6 +15,7 @@ import {
   getLiveAccountBalance,
   getLiveRiskPercent
 } from '@/config/accountConfig';
+import { getLiveAccountState, applyTradeResultToAccount } from '@/lib/account';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -246,9 +247,19 @@ async function runScalperEngine() {
   logs.push(`Market Day Check: UTC day ${currentUtcDay} (Weekend: ${isWeekendNow}). Per-symbol weekend filtering active.`);
 
   let dbConnected = false;
+  let accountState: any = null;
+  let currentLiveBal = getLiveAccountBalance();
+
   try {
     const db = await connectToDatabase();
-    if (db) dbConnected = true;
+    if (db) {
+      dbConnected = true;
+      accountState = await getLiveAccountState();
+      if (accountState) {
+        currentLiveBal = accountState.currentBalance;
+        logs.push(`Live Account Balance: $${currentLiveBal.toFixed(2)} (Total PnL: $${accountState.totalPnL.toFixed(2)} across ${accountState.totalTrades} trades)`);
+      }
+    }
   } catch (err: any) {
     logs.push(`MongoDB warning: ${err?.message || err}`);
   }
@@ -327,8 +338,13 @@ async function runScalperEngine() {
               const rawDiff = trade.action === 'BUY' ? (exitPrice - trade.entryPrice) : (trade.entryPrice - exitPrice);
               const pnlPoints = Number(rawDiff.toFixed(2));
               const spec = getSymbolSpec(trade.symbol);
-              const lotSize = trade.suggestedLotSize || calculatePositionSize(trade.entryPrice, trade.sl, undefined, undefined, spec.contractSize).lotSize;
+              const lotSize = trade.suggestedLotSize || calculatePositionSize(trade.entryPrice, trade.sl, currentLiveBal, undefined, spec.contractSize).lotSize;
               const pnlUSD = newStatus === 'BREAKEVEN' ? 0 : calculatePnLUSD(pnlPoints, lotSize, spec.contractSize);
+
+              // Update account balance dynamically in database
+              const accountUpdate = await applyTradeResultToAccount(pnlUSD, newStatus, trade._id.toString());
+              const updatedBal = accountUpdate.newBalance;
+              currentLiveBal = updatedBal;
 
               // Move trade to TradeHistory archive collection for ML/AI retention
               await TradeHistory.create({
@@ -344,6 +360,7 @@ async function runScalperEngine() {
                 suggestedLotSize: lotSize,
                 pnlPoints,
                 pnlUSD,
+                balanceAfterTrade: updatedBal,
                 rsi: trade.rsi,
                 ema20: trade.ema20,
                 ema100: trade.ema100 || trade.ema200,
@@ -363,17 +380,19 @@ async function runScalperEngine() {
               trade.suggestedLotSize = lotSize;
               trade.pnlPoints = pnlPoints;
               trade.pnlUSD = pnlUSD;
+              trade.balanceAfterTrade = updatedBal;
               trade.closedAt = closedAt;
               await trade.save();
 
-              logs.push(`Scalp trade ${trade._id} (${trade.symbol}) archived with result ${newStatus} (PnL: $${pnlUSD} / ${pnlPoints} pts)`);
+              logs.push(`Scalp trade ${trade._id} (${trade.symbol}) archived with result ${newStatus} (PnL: $${pnlUSD} / ${pnlPoints} pts) | Balance after trade: $${updatedBal.toFixed(2)}`);
 
               const pnlPrefix = pnlUSD > 0 ? '+' : '';
+              const balanceText = `\n🏦 **رصيد الحساب الآن:** $${updatedBal.toFixed(2)} (${pnlPrefix}$${pnlUSD.toFixed(2)})`;
               const outcomeText = newStatus === 'WIN'
-                ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: ${pnlPrefix}$${pnlUSD} (${pnlPrefix}${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت`
+                ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: ${pnlPrefix}$${pnlUSD} (${pnlPrefix}${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${balanceText}`
                 : (newStatus === 'BREAKEVEN'
-                  ? `🛡️ **خروج على نقطة التعادل! (BREAKEVEN)** ⚖️\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: $0.00 | الحجم: ${lotSize.toFixed(2)} لوت`
-                  : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: -$${Math.abs(pnlUSD)} (${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت`);
+                  ? `🛡️ **خروج على نقطة التعادل! (BREAKEVEN)** ⚖️\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: $0.00 | الحجم: ${lotSize.toFixed(2)} لوت${balanceText}`
+                  : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: -$${Math.abs(pnlUSD)} (${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${balanceText}`);
               await sendTelegramNotification(outcomeText);
 
               // Risk Alert: Check for 4+ consecutive losses today (Monitoring only, no automated execution)
@@ -463,8 +482,13 @@ async function runScalperEngine() {
                   const rawDiff = trade.action === 'BUY' ? (currentPrice - trade.entryPrice) : (trade.entryPrice - currentPrice);
                   const pnlPoints = Number(rawDiff.toFixed(2));
                   const spec = getSymbolSpec(trade.symbol);
-                  const lotSize = trade.suggestedLotSize || calculatePositionSize(trade.entryPrice, trade.sl, undefined, undefined, spec.contractSize).lotSize;
+                  const lotSize = trade.suggestedLotSize || calculatePositionSize(trade.entryPrice, trade.sl, currentLiveBal, undefined, spec.contractSize).lotSize;
                   const pnlUSD = calculatePnLUSD(pnlPoints, lotSize, spec.contractSize);
+
+                  // Update account balance dynamically in database
+                  const accountUpdate = await applyTradeResultToAccount(pnlUSD, 'LOSS', trade._id.toString());
+                  const updatedBal = accountUpdate.newBalance;
+                  currentLiveBal = updatedBal;
 
                   await TradeHistory.create({
                     tradeId: trade._id.toString(),
@@ -479,6 +503,7 @@ async function runScalperEngine() {
                     suggestedLotSize: lotSize,
                     pnlPoints,
                     pnlUSD,
+                    balanceAfterTrade: updatedBal,
                     rsi: trade.rsi,
                     ema20: trade.ema20,
                     ema100: trade.ema100 || trade.ema200,
@@ -497,10 +522,11 @@ async function runScalperEngine() {
                   trade.suggestedLotSize = lotSize;
                   trade.pnlPoints = pnlPoints;
                   trade.pnlUSD = pnlUSD;
+                  trade.balanceAfterTrade = updatedBal;
                   trade.closedAt = closedAt;
                   await trade.save();
 
-                  const timeStopMsg = `⏱️ (TIME STOP) 120m limit reached while in loss.\nالرمز: ${trade.symbol}\nسعر الإغلاق: $${formatPrice(currentPrice)}\n💰 النتيجة: -$${Math.abs(pnlUSD)} (${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت`;
+                  const timeStopMsg = `⏱️ (TIME STOP) 120m limit reached while in loss.\nالرمز: ${trade.symbol}\nسعر الإغلاق: $${formatPrice(currentPrice)}\n💰 النتيجة: -$${Math.abs(pnlUSD)} (${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت\n🏦 **رصيد الحساب الآن:** $${updatedBal.toFixed(2)} (-$${Math.abs(pnlUSD).toFixed(2)})`;
                   logs.push(timeStopMsg);
                   console.log(timeStopMsg);
                   await sendTelegramNotification(timeStopMsg);
@@ -637,7 +663,7 @@ async function runScalperEngine() {
       const posSize = calculatePositionSize(
         currentClose,
         sl,
-        getLiveAccountBalance(),
+        currentLiveBal,
         getLiveRiskPercent(),
         spec.contractSize
       );
@@ -676,7 +702,7 @@ async function runScalperEngine() {
 
       // Send Telegram Alert
       const entryTypeArabic = triggerReason === 'PULLBACK' ? 'ارتداد وإعادة اختبار (EMA20 Pullback)' : 'تقاطع زخم مع الاتجاه (RSI Crossover)';
-      let telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- نوع الدخول: 🎯 ${entryTypeArabic}\n- السعر: $${formatPrice(currentClose)}\n- 📏 حجم الصفقة المقترح: ${posSize.lotSize.toFixed(2)} لوت\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (${tpMultiplier.toFixed(1)}x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
+      let telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- نوع الدخول: 🎯 ${entryTypeArabic}\n- السعر: $${formatPrice(currentClose)}\n- 🏦 رصيد الحساب: $${currentLiveBal.toFixed(2)}\n- 📏 حجم الصفقة المقترح: ${posSize.lotSize.toFixed(2)} لوت\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (${tpMultiplier.toFixed(1)}x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
       if (posSize.hasRiskWarning) {
         telegramMsg += `\n\n${posSize.riskWarningMessage}`;
       }
@@ -707,6 +733,14 @@ async function runScalperEngine() {
   return {
     success: true,
     engine: '5m High-Frequency Scalper',
+    account: {
+      currentBalance: currentLiveBal,
+      initialBalance: accountState ? accountState.initialBalance : getLiveAccountBalance(),
+      totalPnL: accountState ? accountState.totalPnL : 0,
+      totalTrades: accountState ? accountState.totalTrades : 0,
+      winsCount: accountState ? accountState.winsCount : 0,
+      lossesCount: accountState ? accountState.lossesCount : 0
+    },
     processedAssets: activeWatchlist.length,
     activeAssets: activeWatchlist.map(a => a.symbol),
     disabledAssets: SCALP_WATCHLIST.filter(a => !a.enabled).map(a => ({ symbol: a.symbol, reason: a.notes })),
