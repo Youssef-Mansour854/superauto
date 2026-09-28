@@ -16,6 +16,13 @@ const DEFAULT_CONFIG = {
   rsiSellMin: 32,
   rsiSellMax: 50,
 
+  // Pullback / Retest Thresholds
+  enablePullback: true,
+  pullbackRsiBuyMin: 48,
+  pullbackRsiBuyMax: 68,
+  pullbackRsiSellMin: 32,
+  pullbackRsiSellMax: 52,
+
   // SL / TP multipliers
   slAtrMultiplier: 1.5,
   tpAtrMultiplierForex: 2.0, // EUR/USD
@@ -287,26 +294,38 @@ function evaluateSignal(symbol, ind, config = DEFAULT_CONFIG, htfContext = null)
     }
   }
 
-  const { close, ema20, ema100, rsi, prevRsi, atr } = ind;
+  const { close, low, high, ema20, ema100, rsi, prevRsi, atr } = ind;
   const isForex = isForexPair(symbol);
   const normSym = normalizeFilterSymbol(symbol);
   const tpMultiplier = (normSym === 'QQQ' || normSym === 'IXIC') 
     ? (config.tpAtrMultiplierQQQ || 2.0) 
     : (isForex ? config.tpAtrMultiplierForex : config.tpAtrMultiplierGold);
 
-  // Trend Rules:
-  // BUY: close > ema100 && close > ema20
-  // SELL: close < ema100 && close < ema20
-  const isBuyTrend = close > ema100 && close > ema20;
-  const isSellTrend = close < ema100 && close < ema20;
+  // 1. Initial Crossover Trigger (RSI Level 50 Crossover in Trend):
+  const isBuyCrossover = close > ema100 && close > ema20 && prevRsi < 50 && rsi >= config.rsiBuyMin && rsi <= config.rsiBuyMax;
+  const isSellCrossover = close < ema100 && close < ema20 && prevRsi > 50 && rsi <= config.rsiSellMax && rsi >= config.rsiSellMin;
 
-  // Momentum Trigger (RSI crossover):
-  // BUY: prevRsi < 50 && rsi >= 50 && rsi <= 68
-  // SELL: prevRsi > 50 && rsi <= 50 && rsi >= 32
-  const isBuyMomentum = prevRsi < 50 && rsi >= config.rsiBuyMin && rsi <= config.rsiBuyMax;
-  const isSellMomentum = prevRsi > 50 && rsi <= config.rsiSellMax && rsi >= config.rsiSellMin;
+  // 2. Trend Continuation Pullback / Retest to EMA20 Trigger (Option 2):
+  const isBuyPullback = Boolean(config.enablePullback) &&
+    close > ema100 &&
+    ema20 > ema100 &&
+    low <= ema20 &&
+    close >= ema20 &&
+    rsi >= (config.pullbackRsiBuyMin || 48) &&
+    rsi <= (config.pullbackRsiBuyMax || 68);
 
-  if (isBuyTrend && isBuyMomentum) {
+  const isSellPullback = Boolean(config.enablePullback) &&
+    close < ema100 &&
+    ema20 < ema100 &&
+    high >= ema20 &&
+    close <= ema20 &&
+    rsi <= (config.pullbackRsiSellMax || 52) &&
+    rsi >= (config.pullbackRsiSellMin || 32);
+
+  const isBuy = isBuyCrossover || isBuyPullback;
+  const isSell = isSellCrossover || isSellPullback;
+
+  if (isBuy) {
     // HTF Confirmation: Must be Bullish on HTF
     if (htfFilter && htfFilter.enabled && htfContext) {
       if (htfContext.trend !== 'BULLISH') {
@@ -331,7 +350,7 @@ function evaluateSignal(symbol, ind, config = DEFAULT_CONFIG, htfContext = null)
     };
   }
 
-  if (isSellTrend && isSellMomentum) {
+  if (isSell) {
     // HTF Confirmation: Must be Bearish on HTF
     if (htfFilter && htfFilter.enabled && htfContext) {
       if (htfContext.trend !== 'BEARISH') {

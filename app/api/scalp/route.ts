@@ -577,28 +577,31 @@ async function runScalperEngine() {
         return { symbol, signalTriggered: false, skipped: true, reason: msg };
       }
 
-      const { currentClose, currentEma20, currentEma100, currentRsi, prevRsi, currentAtr } = ind;
+      const { currentClose, currentLow, currentHigh, currentEma20, currentEma100, currentRsi, prevRsi, currentAtr } = ind;
 
       // Trend-Filtered Dynamic Momentum Strategy Rules:
-      // Trend Direction Filter (The Shield):
-      // - BUY: currentClose > currentEma100 AND currentClose > currentEma20
-      // - SELL: currentClose < currentEma100 AND currentClose < currentEma20
-      // Healthy Momentum Zone (The Trigger - Crossover Event):
-      // - BUY: prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68
-      // - SELL: prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32
+      // 1. Initial Crossover Trigger (RSI Level 50 Crossover in Trend):
+      // - BUY: currentClose > currentEma100 && currentClose > currentEma20 && prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68
+      // - SELL: currentClose < currentEma100 && currentClose < currentEma20 && prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32
+      const isBuyCrossover = currentClose > currentEma100 && currentClose > currentEma20 && prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68;
+      const isSellCrossover = currentClose < currentEma100 && currentClose < currentEma20 && prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32;
+
+      // 2. Trend Continuation Pullback / Retest to EMA20 Trigger (Option 2):
+      // Captures strong trend waves after the initial crossover trade has exited.
+      // - BUY: currentClose > currentEma100 && currentEma20 > currentEma100 && currentLow <= currentEma20 && currentClose >= currentEma20 && currentRsi >= 48 && currentRsi <= 68
+      // - SELL: currentClose < currentEma100 && currentEma20 < currentEma100 && currentHigh >= currentEma20 && currentClose <= currentEma20 && currentRsi <= 52 && currentRsi >= 32
+      const isBuyPullback = currentClose > currentEma100 && currentEma20 > currentEma100 && currentLow <= currentEma20 && currentClose >= currentEma20 && currentRsi >= 48 && currentRsi <= 68;
+      const isSellPullback = currentClose < currentEma100 && currentEma20 < currentEma100 && currentHigh >= currentEma20 && currentClose <= currentEma20 && currentRsi <= 52 && currentRsi >= 32;
 
       let signalType: 'BUY' | 'SELL' | null = null;
+      let triggerReason: 'CROSSOVER' | 'PULLBACK' | null = null;
 
-      const isBuyTrend = currentClose > currentEma100 && currentClose > currentEma20;
-      const isBuyMomentum = prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68;
-
-      const isSellTrend = currentClose < currentEma100 && currentClose < currentEma20;
-      const isSellMomentum = prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32;
-
-      if (isBuyTrend && isBuyMomentum) {
+      if (isBuyCrossover || isBuyPullback) {
         signalType = 'BUY';
-      } else if (isSellTrend && isSellMomentum) {
+        triggerReason = isBuyCrossover ? 'CROSSOVER' : 'PULLBACK';
+      } else if (isSellCrossover || isSellPullback) {
         signalType = 'SELL';
+        triggerReason = isSellCrossover ? 'CROSSOVER' : 'PULLBACK';
       }
 
       if (!signalType) {
@@ -612,7 +615,7 @@ async function runScalperEngine() {
         return { symbol, signalTriggered: false, skipped: true, reason: sessMsg };
       }
 
-      logs.push(`🚨 ${signalType} Scalp Signal Triggered for ${symbol}!`);
+      logs.push(`🚨 ${signalType} Scalp Signal Triggered for ${symbol}! (${triggerReason})`);
 
       // Dynamic Risk Management (ATR-based SL & TP)
       // 2.0 * ATR Take Profit across assets
@@ -672,7 +675,8 @@ async function runScalperEngine() {
       }
 
       // Send Telegram Alert
-      let telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- السعر: $${formatPrice(currentClose)}\n- 📏 حجم الصفقة المقترح: ${posSize.lotSize.toFixed(2)} لوت\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (${tpMultiplier.toFixed(1)}x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
+      const entryTypeArabic = triggerReason === 'PULLBACK' ? 'ارتداد وإعادة اختبار (EMA20 Pullback)' : 'تقاطع زخم مع الاتجاه (RSI Crossover)';
+      let telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- نوع الدخول: 🎯 ${entryTypeArabic}\n- السعر: $${formatPrice(currentClose)}\n- 📏 حجم الصفقة المقترح: ${posSize.lotSize.toFixed(2)} لوت\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (${tpMultiplier.toFixed(1)}x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
       if (posSize.hasRiskWarning) {
         telegramMsg += `\n\n${posSize.riskWarningMessage}`;
       }
