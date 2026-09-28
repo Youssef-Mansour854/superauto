@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { connectToDatabase } from '@/lib/mongodb';
 import Trade from '@/models/Trade';
 import TradeHistory from '@/models/TradeHistory';
+import DataFeedStatus from '@/models/DataFeedStatus';
 import { fetchBinanceKlines, Candle } from '@/lib/binance';
-import { fetchTwelveData5mKlines } from '@/lib/twelvedata';
+import { fetchTwelveData5mKlines, CandleFetchResult } from '@/lib/twelvedata';
 import { calculateScalpIndicators, formatPrice } from '@/lib/indicators';
 import { generateGroqArabicAlert } from '@/lib/groq';
 import { sendTelegramNotification } from '@/lib/telegram';
@@ -119,9 +120,118 @@ function isForexPair(symbol: string): boolean {
   return true;
 }
 
-async function fetchAsset5mCandles(symbol: string, source: string): Promise<Candle[]> {
+function isSymbolMarketOpen(symbol: string, date: Date = new Date()): boolean {
+  const utcDay = date.getUTCDay();
+  // Saturday (6) or Sunday (0) are weekends - always closed for Forex/Gold/Stocks
+  if (utcDay === 0 || utcDay === 6) {
+    if (isCryptoPair(symbol)) return true;
+    return false;
+  }
+
+  const norm = normalizeSymbol(symbol).symbol;
+  if (norm === 'QQQ' || norm.includes('IXIC') || norm.includes('NAS')) {
+    // US Stock Market regular hours: 13:30 UTC to 20:00 UTC (Mon-Fri)
+    const utcHours = date.getUTCHours();
+    const utcMinutes = date.getUTCMinutes();
+    const utcDecimal = utcHours + utcMinutes / 60;
+    return utcDecimal >= 13.5 && utcDecimal < 20.0;
+  }
+
+  if (norm.includes('XAU') || norm.includes('GOLD')) {
+    // Gold spot market: Mon 00:00 UTC to Fri 21:00 UTC
+    if (utcDay === 5 && date.getUTCHours() >= 21) return false;
+    return true;
+  }
+
+  return true;
+}
+
+async function recordDataFeedFailure(
+  symbol: string,
+  fetchResult: CandleFetchResult,
+  logs: string[]
+): Promise<void> {
+  const now = new Date();
+
+  // 1. Never alert on weekends
+  const utcDay = now.getUTCDay();
+  if (utcDay === 0 || utcDay === 6) {
+    return;
+  }
+
+  // 2. Only alert during market hours of this asset
+  if (!isSymbolMarketOpen(symbol, now)) {
+    return;
+  }
+
+  try {
+    let statusDoc = await DataFeedStatus.findOne({ symbol });
+    if (!statusDoc) {
+      statusDoc = new DataFeedStatus({ symbol, consecutiveFailures: 0 });
+    }
+
+    statusDoc.consecutiveFailures = (statusDoc.consecutiveFailures || 0) + 1;
+    statusDoc.lastFailureAt = now;
+    statusDoc.lastHttpStatus = fetchResult.httpStatus;
+    statusDoc.lastErrorMessage = fetchResult.errorMessage || 'Insufficient candle data';
+    statusDoc.updatedAt = now;
+
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    const timeSinceLastAlert = statusDoc.lastAlertSentAt
+      ? now.getTime() - new Date(statusDoc.lastAlertSentAt).getTime()
+      : Infinity;
+
+    // Trigger alert: 3 consecutive failures during market hours, once per outage, throttled to 1 hour
+    if (statusDoc.consecutiveFailures >= 3 && (!statusDoc.outageAlertSent || timeSinceLastAlert >= ONE_HOUR_MS)) {
+      const errorDetail = fetchResult.errorMessage ? `\n- رسالة الخطأ: ${fetchResult.errorMessage}` : '';
+      const alertMsg = `🚨 **تنبيه عاجل: البوت أعمى (Data Feed Outage)** ⚠️\n- الأصل: ${symbol}\n- المشكلة: فشل جلب الشموع لـ ${statusDoc.consecutiveFailures} دورات متتالية أثناء ساعات تداول السوق.\n- كود الاستجابة: HTTP ${fetchResult.httpStatus}${errorDetail}\n- عدد الشموع المجلوبة: ${fetchResult.candleCount}\n- التوقيت: ${now.toISOString()}\n\n⚠️ لن يتمكن المحرك من فحص أو تنفيذ أي صفقات لـ ${symbol} حتى عودة تدفق البيانات.`;
+
+      await sendTelegramNotification(alertMsg);
+      statusDoc.lastAlertSentAt = now;
+      statusDoc.outageAlertSent = true;
+      logs.push(`[BLIND BOT ALERT SENT] for ${symbol} (${statusDoc.consecutiveFailures} consecutive failures).`);
+    }
+
+    await statusDoc.save();
+  } catch (err: any) {
+    logs.push(`Failed to update DataFeedStatus for ${symbol}: ${err?.message || err}`);
+  }
+}
+
+async function markDataFeedSuccess(symbol: string): Promise<void> {
+  try {
+    await DataFeedStatus.findOneAndUpdate(
+      { symbol },
+      {
+        consecutiveFailures: 0,
+        outageAlertSent: false,
+        lastSuccessAt: new Date(),
+        updatedAt: new Date()
+      }
+    );
+  } catch {
+    // Non-blocking
+  }
+}
+
+async function fetchAsset5mCandles(symbol: string, source: string): Promise<CandleFetchResult> {
   if (source === 'BINANCE') {
-    return await fetchBinanceKlines(symbol, '5m', 250);
+    try {
+      const candles = await fetchBinanceKlines(symbol, '5m', 250);
+      return {
+        candles,
+        httpStatus: 200,
+        errorMessage: null,
+        candleCount: candles.length
+      };
+    } catch (err: any) {
+      return {
+        candles: [],
+        httpStatus: err?.response?.status || 500,
+        errorMessage: err?.message || 'Binance fetch error',
+        candleCount: 0
+      };
+    }
   }
   return await fetchTwelveData5mKlines(symbol, '5min', 250);
 }
@@ -156,7 +266,8 @@ async function runScalperEngine() {
             logs.push(`[${matchingItem.symbol}] Market closed (weekend), skipping pending evaluation.`);
             continue;
           }
-          const candles = await fetchAsset5mCandles(matchingItem.symbol, matchingItem.source);
+          const fetchRes = await fetchAsset5mCandles(matchingItem.symbol, matchingItem.source);
+          const candles = fetchRes.candles;
           if (candles && candles.length > 0) {
             const currentCandle = candles[candles.length - 1];
             const currentPrice = currentCandle.close;
@@ -432,12 +543,31 @@ async function runScalperEngine() {
       }
 
       logs.push(`Processing 5m candles for ${symbol} via ${source}...`);
-      const candles = await fetchAsset5mCandles(symbol, source);
+      const fetchResult = await fetchAsset5mCandles(symbol, source);
+      const candles = fetchResult.candles;
 
       if (!candles || candles.length < 100) {
-        const msg = `Insufficient candle data for ${symbol} (minimum 100 required for EMA100). Skipping.`;
+        const errorPart = fetchResult.errorMessage ? ` | Error: ${fetchResult.errorMessage}` : '';
+        const msg = `Insufficient candle data for ${symbol} (received: ${fetchResult.candleCount} candles, HTTP ${fetchResult.httpStatus}${errorPart}, minimum 100 required for EMA100). Skipping.`;
         logs.push(msg);
-        return { symbol, signalTriggered: false, skipped: true, reason: msg };
+
+        if (dbConnected) {
+          await recordDataFeedFailure(symbol, fetchResult, logs);
+        }
+
+        return {
+          symbol,
+          signalTriggered: false,
+          skipped: true,
+          reason: msg,
+          candleCount: fetchResult.candleCount,
+          httpStatus: fetchResult.httpStatus,
+          errorMessage: fetchResult.errorMessage
+        };
+      }
+
+      if (dbConnected) {
+        await markDataFeedSuccess(symbol);
       }
 
       const ind = calculateScalpIndicators(candles);

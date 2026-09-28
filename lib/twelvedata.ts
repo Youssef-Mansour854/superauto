@@ -9,16 +9,32 @@ export function normalizeTwelveDataSymbol(symbol: string): string {
   return symbol;
 }
 
+export interface CandleFetchResult {
+  candles: Candle[];
+  httpStatus: number;
+  errorMessage: string | null;
+  candleCount: number;
+}
+
+/**
+ * Sanitizes any text to guarantee that the API key is never exposed or logged.
+ */
+function sanitizeApiKey(text: string, apiKey: string): string {
+  if (!text) return '';
+  if (!apiKey || apiKey.length < 3) return text;
+  return text.split(apiKey).join('[REDACTED_KEY]');
+}
+
 export async function fetchTwelveData5mKlines(
   symbol: string = 'XAU/USD',
   interval: string = '5min',
   outputsize: number = 100
-): Promise<Candle[]> {
-  try {
-    const apiSymbol = normalizeTwelveDataSymbol(symbol);
-    const apiKey = process.env.TWELVEDATA_API_KEY || '';
-    const url = `https://api.twelvedata.com/time_series`;
+): Promise<CandleFetchResult> {
+  const apiSymbol = normalizeTwelveDataSymbol(symbol);
+  const apiKey = process.env.TWELVEDATA_API_KEY || '';
+  const url = `https://api.twelvedata.com/time_series`;
 
+  try {
     const response = await axios.get(url, {
       params: {
         symbol: apiSymbol,
@@ -27,26 +43,43 @@ export async function fetchTwelveData5mKlines(
         apikey: apiKey,
       },
       timeout: 10000,
+      validateStatus: () => true // Handle 4xx/5xx status gracefully to capture exact HTTP code
     });
 
+    const httpStatus = response.status;
     const data = response.data;
 
     if (!data) {
-      console.warn(`Empty response returned from Twelve Data for '${symbol}'.`);
-      return [];
+      return {
+        candles: [],
+        httpStatus,
+        errorMessage: 'Empty response payload from Twelve Data',
+        candleCount: 0
+      };
     }
 
-    if (data.status === 'error') {
-      console.error(`Twelve Data API error for '${symbol}':`, data.message || data);
-      return [];
+    if (httpStatus >= 400 || data.status === 'error') {
+      const rawMsg = data.message || (typeof data === 'string' ? data : JSON.stringify(data));
+      const cleanMsg = sanitizeApiKey(rawMsg, apiKey);
+      return {
+        candles: [],
+        httpStatus,
+        errorMessage: cleanMsg,
+        candleCount: 0
+      };
     }
 
     // Support single symbol or nested symbol object in response
     const symbolData = data.values ? data : (data[apiSymbol] || data[symbol]);
 
     if (!symbolData || !Array.isArray(symbolData.values) || symbolData.values.length === 0) {
-      console.warn(`No candle values found in Twelve Data response for '${symbol}'.`);
-      return [];
+      const rawMsg = data.message || 'No candle values found in Twelve Data response';
+      return {
+        candles: [],
+        httpStatus,
+        errorMessage: sanitizeApiKey(rawMsg, apiKey),
+        candleCount: 0
+      };
     }
 
     const rawValues = symbolData.values;
@@ -81,10 +114,22 @@ export async function fetchTwelveData5mKlines(
     // Technical indicators (EMA, RSI, ATR) require chronological order (oldest first).
     candles.reverse();
 
-    return candles;
+    return {
+      candles,
+      httpStatus,
+      errorMessage: null,
+      candleCount: candles.length
+    };
   } catch (error: any) {
-    console.error(`Error fetching Twelve Data 5m klines for '${symbol}':`, error?.response?.data || error?.message || error);
-    return [];
+    const httpStatus = error?.response?.status || 500;
+    const rawMsg = error?.response?.data?.message || error?.message || 'Network / Axios request failed';
+    const cleanMsg = sanitizeApiKey(rawMsg, apiKey);
+    return {
+      candles: [],
+      httpStatus,
+      errorMessage: cleanMsg,
+      candleCount: 0
+    };
   }
 }
 
