@@ -1,12 +1,36 @@
 import { NextResponse } from 'next/server';
 import { getLiveAccountState, resetAccountBalance } from '@/lib/account';
+import { connectToDatabase } from '@/lib/mongodb';
+import TradeHistory from '@/models/TradeHistory';
+import Trade from '@/models/Trade';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    await connectToDatabase();
     const state = await getLiveAccountState();
+    const url = new URL(req.url);
+    const history = url.searchParams.get('history');
+
+    if (history === 'true') {
+      const startOfWeek = new Date('2026-09-28T00:00:00.000Z');
+      const trades = await TradeHistory.find({
+        closedAt: { $gte: startOfWeek }
+      }).sort({ closedAt: -1 }).limit(100);
+
+      const activeTrades = await Trade.find({ status: { $ne: 'ARCHIVED' } });
+
+      return NextResponse.json({
+        success: true,
+        account: state,
+        activeTrades,
+        weeklyTradesCount: trades.length,
+        trades
+      }, { status: 200 });
+    }
+
     return NextResponse.json({
       success: true,
       account: state
