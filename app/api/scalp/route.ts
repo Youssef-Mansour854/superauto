@@ -80,7 +80,7 @@ interface SessionFilterConfig {
 
 const SESSION_FILTERS: Record<string, SessionFilterConfig> = {
   'EUR/USD': { enabled: true, startHourCairo: 0, endHourCairo: 8 },  // Block Asian session 00:00 - 08:00 Cairo
-  'XAU/USD': { enabled: true, startHourCairo: 9, endHourCairo: 19 }, // Golden Session (London + NY overlap): 09:00 - 19:00 Cairo
+  'XAU/USD': { enabled: true, startHourCairo: 2, endHourCairo: 19 }, // Tokyo Open Window + London + NY Overlap: 02:00 - 19:00 Cairo
   'QQQ': { enabled: false, startHourCairo: 16.5, endHourCairo: 23.0 }
 };
 
