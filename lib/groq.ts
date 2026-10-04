@@ -150,3 +150,109 @@ ${newsSummary}
     return defaultFallback;
   }
 }
+
+export interface TradeValidationData {
+  symbol: string;
+  action: 'BUY' | 'SELL';
+  triggerReason: 'CROSSOVER' | 'PULLBACK';
+  entryPrice: number;
+  sl: number;
+  tp: number;
+  rsi: number;
+  ema20: number;
+  ema100: number;
+  atr: number;
+}
+
+export interface TradeValidationResult {
+  approved: boolean;
+  score: number;
+  reason: string;
+}
+
+/**
+ * 🤖 Groq AI Trade Confluence & Gatekeeper
+ * يفحص جودة الإشارة الفنية ويقيمها من 1 إلى 10 قبل الدخول.
+ * لو التقييم أقل من 7 أو في خطر تذبذب/تشبع يتم رفض الصفقة لحماية الحساب.
+ */
+export async function validateTradeConfluenceWithGroq(data: TradeValidationData): Promise<TradeValidationResult> {
+  const apiKey = process.env.GROQ_API_KEY;
+
+  // Fallback فني صارم في حال تعذر الاتصال بـ Groq
+  const fallbackApprove = data.action === 'BUY'
+    ? data.rsi >= 46 && data.rsi <= 65
+    : data.rsi <= 54 && data.rsi >= 35;
+
+  const defaultFallback: TradeValidationResult = {
+    approved: fallbackApprove,
+    score: fallbackApprove ? 7.5 : 5.0,
+    reason: fallbackApprove ? 'موافقة فنية تلقائية (Fallback): شروط الـ RSI والترند متوافقة' : 'رفض فني تلقائي (Fallback): مؤشر RSI في منطقة تشبع أو تذبذب خطر'
+  };
+
+  if (!apiKey || apiKey.includes('your_groq_api_key')) {
+    return defaultFallback;
+  }
+
+  const systemPrompt = `أنت خبير تداول كمي فائق الدقة متخصص في سكالبينج الذهب (XAU/USD).
+مهمتك تدقيق جودة إشارات السكالبينج (Gatekeeper) بصرامة بالغة لمنع فتح صفقات في قمم/قيعان أو في مناطق تذبذب كاذب.
+أجب فقط بصيغة JSON بدون أي نصوص قبلها أو بعدها بالشكل التالي:
+{
+  "approved": boolean,
+  "score": number,
+  "reason": "سبب التقييم بالعربية في جملة واحدة"
+}`;
+
+  const userPrompt = `
+قم بتقييم إشارة السكالبينج التالية لـ ${data.symbol}:
+- نوع الصفقة: ${data.action} (${data.triggerReason === 'PULLBACK' ? 'ارتداد EMA20' : 'تقاطع زخم RSI'})
+- السعر الحالي: $${formatPrice(data.entryPrice)}
+- Stop Loss: $${formatPrice(data.sl)} | Take Profit: $${formatPrice(data.tp)}
+- RSI (14): ${formatPrice(data.rsi)}
+- EMA 20: $${formatPrice(data.ema20)} | EMA 100: $${formatPrice(data.ema100)}
+- ATR (14): $${formatPrice(data.atr)}
+
+شروط التقييم الصارم:
+- اعطِ درجة من 1 إلى 10 (الموافقة فقط إذا كان التقييم 7 أو أعلى).
+- إذا كانت الصفقة BUY و RSI > 65، أو السعر متضخم وبعيد عن EMA20 -> ارفض (Score < 7).
+- إذا كانت الصفقة SELL و RSI < 35، أو السعر منخفض جداً وبعيد عن EMA20 -> ارفض (Score < 7).
+- إذا كانت الشموع متوافقة مع الاتجاه والـ RSI متزن ومسافة الـ SL مناسبة -> وافق (Score >= 7).
+أخرج كود JSON فقط.
+`;
+
+  try {
+    const response = await axios.post(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        model: DEFAULT_MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 200,
+        response_format: { type: 'json_object' }
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 6000,
+      }
+    );
+
+    const rawContent = response.data?.choices?.[0]?.message?.content?.trim();
+    if (!rawContent) return defaultFallback;
+
+    const parsed = JSON.parse(rawContent);
+    const score = typeof parsed.score === 'number' ? parsed.score : (parsed.approved ? 7.5 : 5.0);
+    const approved = Boolean(parsed.approved) && score >= 7.0;
+    const reason = parsed.reason || (approved ? 'تمت الموافقة من Groq AI' : 'تم الرفض بواسطة Groq AI');
+
+    return { approved, score, reason };
+  } catch (err: any) {
+    console.error('Error validating trade with Groq AI:', err?.response?.data || err?.message || err);
+    return defaultFallback;
+  }
+}
+

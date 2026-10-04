@@ -15,10 +15,19 @@
 export const ACCOUNT_BALANCE: number = 100; // ⚠️ PLACEHOLDER - يحتاج تحديث: رصيد الحساب الحالي (100$)
 
 // ============================================================================
-// ⚠️ 2. نسبة المخاطرة لكل صفقة (Risk Percentage per Trade)
+// ⚠️ 2. نسبة المخاطرة وسقف المخاطرة لكل صفقة وقواطع الدائرة
 // ============================================================================
-// PLACEHOLDER - يحتاج تحديث: نسبة المخاطرة الافتراضية 1% من رأس المال لكل صفقة
-export const RISK_PERCENT: number = 1.0; // ⚠️ PLACEHOLDER - يحتاج تحديث: افتراضي 1% (0.01)
+// نسبة المخاطرة الافتراضية 2% من رأس المال لكل صفقة
+export const RISK_PERCENT: number = 2.0;
+
+// أقصى خسارة مسموح بها للصفقة الواحدة بالدولار لحماية الحساب من قفزات الـ ATR العنيفة
+export const MAX_TRADE_RISK_USD: number = 2.50; // سقف الخسارة 2.50$ للصفقة (لحساب 100$)
+
+// قاطع الدائرة اليومي: أقصى خسارة يومية مسموح بها قبل إيقاف البوت آلياً
+export const MAX_DAILY_LOSS_USD: number = 8.00; // سقف الخسارة اليومية 8.00$
+
+// قاطع الدائرة اليومي: أقصى عدد خسائر متتالية مسموح به في اليوم
+export const MAX_CONSECUTIVE_LOSSES: number = 3; // إيقاف فوري عند 3 خسائر متتالية
 
 // ============================================================================
 // ⚠️ 3. مواصفات العقود وقيمة النقطة (Contract Size & Tick Value)
@@ -102,6 +111,30 @@ export function getLiveRiskPercent(): number {
   return RISK_PERCENT;
 }
 
+export function getMaxTradeRiskUSD(): number {
+  if (process.env.MAX_TRADE_RISK_USD) {
+    const parsed = parseFloat(process.env.MAX_TRADE_RISK_USD);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return MAX_TRADE_RISK_USD;
+}
+
+export function getMaxDailyLossUSD(): number {
+  if (process.env.MAX_DAILY_LOSS_USD) {
+    const parsed = parseFloat(process.env.MAX_DAILY_LOSS_USD);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return MAX_DAILY_LOSS_USD;
+}
+
+export function getMaxConsecutiveLosses(): number {
+  if (process.env.MAX_CONSECUTIVE_LOSSES) {
+    const parsed = parseInt(process.env.MAX_CONSECUTIVE_LOSSES, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return MAX_CONSECUTIVE_LOSSES;
+}
+
 /**
  * جلب مواصفات الرمز
  */
@@ -132,6 +165,7 @@ export interface PositionSizeResult {
   contractSize: number;
   accountBalance: number;
   hasRiskWarning: boolean;
+  exceedsMaxRiskCap: boolean;
   riskWarningMessage: string;
 }
 
@@ -172,6 +206,7 @@ export function calculatePositionSize(
       contractSize,
       accountBalance,
       hasRiskWarning: false,
+      exceedsMaxRiskCap: false,
       riskWarningMessage: ''
     };
   }
@@ -190,13 +225,19 @@ export function calculatePositionSize(
   const actualRiskUSD = Number((slDistance * contractSize * roundedLot).toFixed(2));
   const actualRiskPercent = Number(((actualRiskUSD / accountBalance) * 100).toFixed(2));
 
-  // التحقق مما إذا كانت المخاطرة الفعلية تختلف عن المستهدفة بأكثر من 20%
-  // (مثلاً إذا كانت النسبة المستهدفة 1% والفعلية تجاوزت 1.2%)
-  const hasRiskWarning = (actualRiskPercent - riskPercent) / riskPercent > 0.20;
+  // التحقق من تجاوز سقف المخاطرة الأقصى بالدولار (Max Risk Cap)
+  const maxCapUSD = getMaxTradeRiskUSD();
+  const exceedsMaxRiskCap = actualRiskUSD > maxCapUSD;
 
-  const riskWarningMessage = hasRiskWarning
-    ? `⚠️ تحذير: المخاطرة الفعلية ${actualRiskPercent}% أعلى من المستهدف ${riskPercent}% بسبب الحد الأدنى للوت (0.01) — الإعدادات الحالية (Contract Size/Tick Value) لسه placeholder ومش دقيقة لحساب بهذا الحجم.`
-    : '';
+  // التحقق مما إذا كانت المخاطرة الفعلية تختلف عن المستهدفة بأكثر من 20%
+  const hasRiskWarning = ((actualRiskPercent - riskPercent) / riskPercent > 0.20) || exceedsMaxRiskCap;
+
+  let riskWarningMessage = '';
+  if (exceedsMaxRiskCap) {
+    riskWarningMessage = `🚨 خطر تقلب مفرط: المخاطرة الفعلية ($${actualRiskUSD.toFixed(2)}) تتجاوز سقف المخاطرة الأقصى المسموح به ($${maxCapUSD.toFixed(2)}) بسبب اتساع الـ ATR!`;
+  } else if (hasRiskWarning) {
+    riskWarningMessage = `⚠️ تحذير: المخاطرة الفعلية ${actualRiskPercent}% أعلى من المستهدف ${riskPercent}% بسبب الحد الأدنى للوت (0.01).`;
+  }
 
   return {
     lotSize: roundedLot,
@@ -211,6 +252,7 @@ export function calculatePositionSize(
     contractSize,
     accountBalance,
     hasRiskWarning,
+    exceedsMaxRiskCap,
     riskWarningMessage
   };
 }

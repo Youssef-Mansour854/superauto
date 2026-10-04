@@ -6,7 +6,7 @@ import DataFeedStatus from '@/models/DataFeedStatus';
 import { fetchBinanceKlines, Candle } from '@/lib/binance';
 import { fetchTwelveData5mKlines, CandleFetchResult } from '@/lib/twelvedata';
 import { calculateScalpIndicators, formatPrice } from '@/lib/indicators';
-import { generateGroqArabicAlert } from '@/lib/groq';
+import { generateGroqArabicAlert, validateTradeConfluenceWithGroq } from '@/lib/groq';
 import { sendTelegramNotification } from '@/lib/telegram';
 import {
   calculatePositionSize,
@@ -14,7 +14,10 @@ import {
   calculateDetailedPnL,
   getSymbolSpec,
   getLiveAccountBalance,
-  getLiveRiskPercent
+  getLiveRiskPercent,
+  getMaxTradeRiskUSD,
+  getMaxDailyLossUSD,
+  getMaxConsecutiveLosses
 } from '@/config/accountConfig';
 import { getLiveAccountState, applyTradeResultToAccount } from '@/lib/account';
 
@@ -37,7 +40,12 @@ export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
     enabled: false,
     notes: 'PAUSED: marginal edge even after best tuning found (session filter + TP 3.0x ATR), still net negative (-40 pips / PF 0.94 over 71 days). Revisit only with a different entry strategy (mean-reversion, not trend-following).'
   },
-  { symbol: 'QQQ', source: 'TWELVEDATA', enabled: true },
+  {
+    symbol: 'QQQ',
+    source: 'TWELVEDATA',
+    enabled: false,
+    notes: 'DISABLED: 9.5% win rate in live testing. Disabled to focus 100% on Gold (XAU/USD).'
+  },
   {
     symbol: 'BTC/USD',
     source: 'TWELVEDATA',
@@ -72,9 +80,18 @@ interface SessionFilterConfig {
 
 const SESSION_FILTERS: Record<string, SessionFilterConfig> = {
   'EUR/USD': { enabled: true, startHourCairo: 0, endHourCairo: 8 },  // Block Asian session 00:00 - 08:00 Cairo
-  'XAU/USD': { enabled: false, startHourCairo: 0, endHourCairo: 24 }, // 24h baseline for Gold
-  'QQQ': { enabled: false, startHourCairo: 16.5, endHourCairo: 23.0 }  // Disabled by default (US Session 16:30 - 23:00 Cairo)
+  'XAU/USD': { enabled: true, startHourCairo: 9, endHourCairo: 19 }, // Golden Session (London + NY overlap): 09:00 - 19:00 Cairo
+  'QQQ': { enabled: false, startHourCairo: 16.5, endHourCairo: 23.0 }
 };
+
+function isFridayBlocked(symbol: string, date: Date = new Date()): boolean {
+  const norm = normalizeSymbol(symbol).symbol;
+  if (norm === 'XAU/USD' || isForexPair(symbol)) {
+    // 5 = Friday
+    return date.getUTCDay() === 5;
+  }
+  return false;
+}
 
 function isSessionAllowed(symbol: string, date: Date = new Date()): boolean {
   const norm = normalizeSymbol(symbol).symbol;
@@ -406,7 +423,7 @@ async function runScalperEngine() {
                   : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة الصافية: -$${Math.abs(netPnLUSD).toFixed(2)} (${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}${balanceText}`);
               await sendTelegramNotification(outcomeText);
 
-              // Risk Alert: Check for 4+ consecutive losses today (Monitoring only, no automated execution)
+              // Daily Hard Circuit Breaker Trigger Check on Exit
               if (newStatus === 'LOSS') {
                 try {
                   const startOfDay = new Date();
@@ -422,8 +439,17 @@ async function runScalperEngine() {
                     else break;
                   }
 
-                  if (consecLosses >= 4) {
-                    const warningMsg = `⚠️ **تحذير إدارة المخاطر**: تم تسجيل ${consecLosses} خسائر متتالية اليوم!\nيرجى توخي الحذر ومتابعة حالة السوق.`;
+                  let dailyPnL = 0;
+                  const allToday = await TradeHistory.find({ closedAt: { $gte: startOfDay } });
+                  for (const t of allToday) {
+                    dailyPnL += (t.netPnLUSD || 0);
+                  }
+
+                  const maxLosses = getMaxConsecutiveLosses();
+                  const maxDailyLoss = getMaxDailyLossUSD();
+
+                  if (consecLosses >= maxLosses || dailyPnL <= -maxDailyLoss) {
+                    const warningMsg = `⛔ **تفعيل قاطع الدائرة اليومي (Circuit Breaker Activated)** 🛡️\n\n- عدد الخسائر المتتالية اليوم: ${consecLosses} (الحد الأقصى ${maxLosses})\n- صافي خسارة اليوم: -$${Math.abs(dailyPnL).toFixed(2)} (الحد الأقصى -$${maxDailyLoss.toFixed(2)})\n- الإجراء: **تم إيقاف فتح أي صفقات جديدة آلياً حتى بداية الغد (00:00 UTC)** لحماية رأس المال.`;
                     await sendTelegramNotification(warningMsg);
                     logs.push(warningMsg);
                   }
@@ -562,6 +588,57 @@ async function runScalperEngine() {
     }
   }
 
+  // --------------------------------------------------------------------------
+  // 🛡️ Daily Hard Circuit Breaker (قاطع الدائرة اليومي الإلزامي)
+  // --------------------------------------------------------------------------
+  let circuitBreakerTriggered = false;
+  let circuitBreakerReason = '';
+
+  if (dbConnected) {
+    try {
+      const startOfDay = new Date();
+      startOfDay.setUTCHours(0, 0, 0, 0);
+
+      const todayClosedTrades = await TradeHistory.find({
+        closedAt: { $gte: startOfDay }
+      }).sort({ closedAt: -1 });
+
+      let consecLosses = 0;
+      let dailyPnLUSD = 0;
+
+      for (const t of todayClosedTrades) {
+        dailyPnLUSD += (t.netPnLUSD || 0);
+      }
+
+      for (const t of todayClosedTrades) {
+        if (t.status === 'LOSS') {
+          consecLosses++;
+        } else if (t.status === 'WIN') {
+          break;
+        }
+      }
+
+      const maxConsec = getMaxConsecutiveLosses();
+      const maxDailyLoss = getMaxDailyLossUSD();
+
+      if (consecLosses >= maxConsec) {
+        circuitBreakerTriggered = true;
+        circuitBreakerReason = `تم تسجيل ${consecLosses} خسائر متتالية اليوم (الحد الأقصى ${maxConsec})`;
+      } else if (dailyPnLUSD <= -maxDailyLoss) {
+        circuitBreakerTriggered = true;
+        circuitBreakerReason = `تجاوز الحد الأقصى للخسارة اليومية: -$${Math.abs(dailyPnLUSD).toFixed(2)} (الحد الأقصى -$${maxDailyLoss.toFixed(2)})`;
+      }
+
+      if (circuitBreakerTriggered) {
+        const breakerLogMsg = `⛔ [CIRCUIT BREAKER] قاطع الدائرة اليومي نشط: ${circuitBreakerReason}. تم إيقاف فتح أي صفقات جديدة حتى منتصف الليل (00:00 UTC).`;
+        logs.push(breakerLogMsg);
+        console.warn(breakerLogMsg);
+      }
+    } catch (cbErr: any) {
+      logs.push(`Error checking daily circuit breaker: ${cbErr?.message || cbErr}`);
+    }
+  }
+
   // 2. Filter active assets and iterate concurrently (Promise.allSettled)
   const activeWatchlist = SCALP_WATCHLIST.filter(item => item.enabled);
   logs.push(`Active Watchlist (${activeWatchlist.length} assets): ${activeWatchlist.map(a => a.symbol).join(', ')}`);
@@ -569,11 +646,24 @@ async function runScalperEngine() {
   const assetPromises = activeWatchlist.map(async (item) => {
     const { symbol, source } = item;
     try {
+      if (circuitBreakerTriggered) {
+        const cbSkipMsg = `⛔ [${symbol}] قاطع الدائرة اليومي نشط (${circuitBreakerReason}). تم إيقاف التداول للحفاظ على رأس المال والأرباح.`;
+        logs.push(cbSkipMsg);
+        return { symbol, signalTriggered: false, skipped: true, reason: cbSkipMsg, circuitBreaker: true };
+      }
+
       if (isMarketWeekend(symbol)) {
         const weekendMsg = `[${symbol}] Weekend detected: Market closed for this asset. Skipping.`;
         console.log(weekendMsg);
         logs.push(weekendMsg);
         return { symbol, signalTriggered: false, skipped: true, reason: weekendMsg };
+      }
+
+      if (isFridayBlocked(symbol)) {
+        const fridayMsg = `🛡️ [${symbol}] Friday Guard Active: تم حظر التداول يوم الجمعة بالكامل لحماية الحساب من تقلبات نهاية الأسبوع وأخبار NFP.`;
+        console.log(fridayMsg);
+        logs.push(fridayMsg);
+        return { symbol, signalTriggered: false, skipped: true, reason: fridayMsg };
       }
 
       if (dbConnected) {
@@ -689,6 +779,37 @@ async function runScalperEngine() {
         spec.contractSize
       );
 
+      // 🛡️ فحص سقف المخاطرة الأقصى (Max Risk Cap) لحماية الحساب من قفزات الـ ATR العنيفة
+      if (posSize.exceedsMaxRiskCap) {
+        const skipCapMsg = `🚨 [${symbol}] تم تخطي الصفقة: مسافة وقف الخسارة تستلزم مخاطرة ($${posSize.actualRiskUSD.toFixed(2)}) تتجاوز سقف المخاطرة المسموح به ($${getMaxTradeRiskUSD().toFixed(2)}) بسبب تضخم الـ ATR (${currentAtr.toFixed(2)}). تم إلغاء الصفقة لحماية الحساب.`;
+        logs.push(skipCapMsg);
+        console.warn(skipCapMsg);
+        return { symbol, signalTriggered: false, skipped: true, reason: skipCapMsg };
+      }
+
+      // 🤖 Groq AI Gatekeeper: فحص جودة وتوافق الإشارة قبل التنفيذ
+      const groqValidation = await validateTradeConfluenceWithGroq({
+        symbol,
+        action: signalType,
+        triggerReason: triggerReason || 'CROSSOVER',
+        entryPrice: currentClose,
+        sl,
+        tp,
+        rsi: currentRsi,
+        ema20: currentEma20,
+        ema100: currentEma100,
+        atr: currentAtr
+      });
+
+      if (!groqValidation.approved) {
+        const rejectMsg = `🤖 [${symbol}] رفضت Groq AI الصفقة (تقييم: ${groqValidation.score}/10) | السبب: ${groqValidation.reason}`;
+        logs.push(rejectMsg);
+        console.log(rejectMsg);
+        return { symbol, signalTriggered: false, skipped: true, reason: rejectMsg, groqValidation };
+      }
+
+      logs.push(`✅ [${symbol}] وافقت Groq AI على الصفقة (تقييم: ${groqValidation.score}/10) | السبب: ${groqValidation.reason}`);
+
       const signalDetails = {
         symbol,
         action: signalType,
@@ -723,13 +844,13 @@ async function runScalperEngine() {
 
       // Send Telegram Alert
       const entryTypeArabic = triggerReason === 'PULLBACK' ? 'ارتداد وإعادة اختبار (EMA20 Pullback)' : 'تقاطع زخم مع الاتجاه (RSI Crossover)';
-      let telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- نوع الدخول: 🎯 ${entryTypeArabic}\n- السعر: $${formatPrice(currentClose)}\n- 🏦 رصيد الحساب: $${currentLiveBal.toFixed(2)}\n- 📏 حجم الصفقة المقترح: ${posSize.lotSize.toFixed(2)} لوت\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (${tpMultiplier.toFixed(1)}x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
+      let telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Momentum + AI Gatekeeper):**\n- الأصل: ${symbol}\n- نوع الدخول: 🎯 ${entryTypeArabic}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- السعر: $${formatPrice(currentClose)}\n- 🏦 رصيد الحساب: $${currentLiveBal.toFixed(2)}\n- 📏 حجم الصفقة المقترح: ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: $${posSize.actualRiskUSD.toFixed(2)} / سقف $${getMaxTradeRiskUSD().toFixed(2)})\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (${tpMultiplier.toFixed(1)}x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
       if (posSize.hasRiskWarning) {
         telegramMsg += `\n\n${posSize.riskWarningMessage}`;
       }
       await sendTelegramNotification(telegramMsg);
 
-      return { symbol, signalTriggered: true, signal: signalDetails, groqAnalysis };
+      return { symbol, signalTriggered: true, signal: signalDetails, groqAnalysis, groqValidation };
 
     } catch (assetErr: any) {
       const errMsg = `Error processing scalp asset ${symbol}: ${assetErr?.message || assetErr}`;

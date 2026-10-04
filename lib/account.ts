@@ -115,6 +115,10 @@ export async function resetAccountBalance(newBalance: number): Promise<IAccountS
           initialBalance: newBalance,
           currentBalance: newBalance,
           totalPnL: 0,
+          totalTrades: 0,
+          winsCount: 0,
+          lossesCount: 0,
+          breakevenCount: 0,
           updatedAt: new Date()
         }
       },
