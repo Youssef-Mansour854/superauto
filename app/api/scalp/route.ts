@@ -742,7 +742,17 @@ async function runScalperEngine() {
       }
 
       if (!signalType) {
-        return { symbol, signalTriggered: false, close: currentClose, rsi: currentRsi, ema20: currentEma20, ema100: currentEma100, atr: currentAtr };
+        return {
+          symbol,
+          signalTriggered: false,
+          close: currentClose,
+          rsi: currentRsi,
+          ema20: currentEma20,
+          ema100: currentEma100,
+          atr: currentAtr,
+          slDistance: Number((currentAtr * 1.5).toFixed(2)),
+          maxRiskCapUSD: getMaxTradeRiskUSD()
+        };
       }
 
       // Session Filter Check

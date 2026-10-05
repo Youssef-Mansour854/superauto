@@ -21,7 +21,7 @@ export const ACCOUNT_BALANCE: number = 100; // ⚠️ PLACEHOLDER - يحتاج �
 export const RISK_PERCENT: number = 2.0;
 
 // أقصى خسارة مسموح بها للصفقة الواحدة بالدولار لحماية الحساب من قفزات الـ ATR العنيفة
-export const MAX_TRADE_RISK_USD: number = 2.50; // سقف الخسارة 2.50$ للصفقة (لحساب 100$)
+export const MAX_TRADE_RISK_USD: number = 5.50; // سقف الخسارة 5.50$ للصفقة (يسمح بحركة الذهب الطبيعية ويمنع قفزات الأخبار)
 
 // قاطع الدائرة اليومي: أقصى خسارة يومية مسموح بها قبل إيقاف البوت آلياً
 export const MAX_DAILY_LOSS_USD: number = 8.00; // سقف الخسارة اليومية 8.00$
