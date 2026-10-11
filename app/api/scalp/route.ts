@@ -17,7 +17,8 @@ import {
   getLiveRiskPercent,
   getMaxTradeRiskUSD,
   getMaxDailyLossUSD,
-  getMaxConsecutiveLosses
+  getMaxConsecutiveLosses,
+  getCoolDownMinutes
 } from '@/config/accountConfig';
 import { getLiveAccountState, applyTradeResultToAccount } from '@/lib/account';
 
@@ -322,13 +323,13 @@ async function runScalperEngine() {
               const softSlHit = currentPrice <= trade.sl; // Soft stop on candle CLOSE
 
               if (hardSlHit) {
-                newStatus = 'LOSS';
+                newStatus = trade.breakevenApplied && Math.abs(hardSl - trade.entryPrice) < 0.05 ? 'BREAKEVEN' : 'LOSS';
                 exitPrice = hardSl;
               } else if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
               } else if (softSlHit) {
-                newStatus = trade.breakevenApplied && Math.abs(trade.sl - trade.entryPrice) < 0.0001 ? 'BREAKEVEN' : 'LOSS';
+                newStatus = trade.breakevenApplied && Math.abs(trade.sl - trade.entryPrice) < 0.05 ? 'BREAKEVEN' : 'LOSS';
                 exitPrice = trade.sl;
               }
             } else if (trade.action === 'SELL') {
@@ -337,13 +338,13 @@ async function runScalperEngine() {
               const softSlHit = currentPrice >= trade.sl; // Soft stop on candle CLOSE
 
               if (hardSlHit) {
-                newStatus = 'LOSS';
+                newStatus = trade.breakevenApplied && Math.abs(hardSl - trade.entryPrice) < 0.05 ? 'BREAKEVEN' : 'LOSS';
                 exitPrice = hardSl;
               } else if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
               } else if (softSlHit) {
-                newStatus = trade.breakevenApplied && Math.abs(trade.sl - trade.entryPrice) < 0.0001 ? 'BREAKEVEN' : 'LOSS';
+                newStatus = trade.breakevenApplied && Math.abs(trade.sl - trade.entryPrice) < 0.05 ? 'BREAKEVEN' : 'LOSS';
                 exitPrice = trade.sl;
               }
             }
@@ -355,6 +356,12 @@ async function runScalperEngine() {
               // Calculate pnlPoints and detailed PnL with trading fees (Spread + Slippage + Commission)
               const rawDiff = trade.action === 'BUY' ? (exitPrice - trade.entryPrice) : (trade.entryPrice - exitPrice);
               const pnlPoints = Number(rawDiff.toFixed(2));
+
+              // If price exited at entry price with breakeven applied, guarantee status is BREAKEVEN
+              if (trade.breakevenApplied && (pnlPoints === 0 || Math.abs(rawDiff) < 0.05)) {
+                newStatus = 'BREAKEVEN';
+              }
+
               const spec = getSymbolSpec(trade.symbol);
               const lotSize = trade.suggestedLotSize || calculatePositionSize(trade.entryPrice, trade.sl, currentLiveBal, undefined, spec.contractSize).lotSize;
               const pnlBreakdown = calculateDetailedPnL(pnlPoints, lotSize, trade.symbol, newStatus === 'BREAKEVEN');
@@ -435,8 +442,10 @@ async function runScalperEngine() {
 
                   let consecLosses = 0;
                   for (const t of recentToday) {
+                    const isBE = t.status === 'BREAKEVEN' || t.pnlPoints === 0 || Math.abs((t.entryPrice || 0) - (t.exitPrice || 0)) < 0.05;
+                    if (isBE) continue; // صفقات التعادل حيادية ولا تُحسب كخسارة
                     if (t.status === 'LOSS') consecLosses++;
-                    else break;
+                    else if (t.status === 'WIN') break;
                   }
 
                   let dailyPnL = 0;
@@ -447,11 +456,16 @@ async function runScalperEngine() {
 
                   const maxLosses = getMaxConsecutiveLosses();
                   const maxDailyLoss = getMaxDailyLossUSD();
+                  const coolDownMin = getCoolDownMinutes();
 
-                  if (consecLosses >= maxLosses || dailyPnL <= -maxDailyLoss) {
-                    const warningMsg = `⛔ **تفعيل قاطع الدائرة اليومي (Circuit Breaker Activated)** 🛡️\n\n- عدد الخسائر المتتالية اليوم: ${consecLosses} (الحد الأقصى ${maxLosses})\n- صافي خسارة اليوم: -$${Math.abs(dailyPnL).toFixed(2)} (الحد الأقصى -$${maxDailyLoss.toFixed(2)})\n- الإجراء: **تم إيقاف فتح أي صفقات جديدة آلياً حتى بداية الغد (00:00 UTC)** لحماية رأس المال.`;
+                  if (dailyPnL <= -maxDailyLoss) {
+                    const warningMsg = `⛔ **تفعيل قاطع الدائرة اليومي (Max Daily Loss Limit)** 🛡️\n\n- صافي خسارة اليوم: -$${Math.abs(dailyPnL).toFixed(2)} (الحد الأقصى -$${maxDailyLoss.toFixed(2)})\n- الإجراء: **تم إيقاف فتح أي صفقات جديدة آلياً حتى منتصف الليل (00:00 UTC)** لحماية رأس المال بالكامل.`;
                     await sendTelegramNotification(warningMsg);
                     logs.push(warningMsg);
+                  } else if (consecLosses >= maxLosses) {
+                    const coolDownMsg = `⚠️ **تفعيل فترة التبريد الذكية (Smart Cool-down)** ⏳\n\n- تم تسجيل ${consecLosses} خسائر حقيقية متتالية.\n- الإجراء: **تم إيقاف فتح الصفقات مؤقتاً لمدة ${coolDownMin} دقيقة (ساعتان ونصف)** لتهدئة التذبذب واستئناف التداول للجلسة التالية تلقائياً.`;
+                    await sendTelegramNotification(coolDownMsg);
+                    logs.push(coolDownMsg);
                   }
                 } catch (lossErr: any) {
                   console.error('Error checking consecutive losses:', lossErr?.message || lossErr);
@@ -462,9 +476,9 @@ async function runScalperEngine() {
               // Advanced Trade Management: Breakeven & Time Stop
               // -------------------------------------------------------------
 
-              // 1. Breakeven Logic (Move SL to Entry Price at >= 60% TP progress for Gold, 50% for others)
+              // 1. Breakeven Logic (Move SL to Entry Price at >= 75% TP progress for Gold, 60% for others)
               if (!trade.breakevenApplied) {
-                const beRatio = matchingItem.symbol === 'XAU/USD' ? 0.6 : 0.5;
+                const beRatio = matchingItem.symbol === 'XAU/USD' ? 0.75 : 0.6;
                 let isBeReached = false;
 
                 if (trade.action === 'BUY') {
@@ -605,13 +619,19 @@ async function runScalperEngine() {
 
       let consecLosses = 0;
       let dailyPnLUSD = 0;
+      let lastLossClosedAt: Date | null = null;
 
       for (const t of todayClosedTrades) {
         dailyPnLUSD += (t.netPnLUSD || 0);
       }
 
       for (const t of todayClosedTrades) {
+        const isBE = t.status === 'BREAKEVEN' || t.pnlPoints === 0 || Math.abs((t.entryPrice || 0) - (t.exitPrice || 0)) < 0.05;
+        if (isBE) continue; // صفقات التعادل حيادية ولا تُحسب كخسارة
         if (t.status === 'LOSS') {
+          if (!lastLossClosedAt) {
+            lastLossClosedAt = t.closedAt ? new Date(t.closedAt) : null;
+          }
           consecLosses++;
         } else if (t.status === 'WIN') {
           break;
@@ -620,17 +640,27 @@ async function runScalperEngine() {
 
       const maxConsec = getMaxConsecutiveLosses();
       const maxDailyLoss = getMaxDailyLossUSD();
+      const coolDownMin = getCoolDownMinutes();
 
-      if (consecLosses >= maxConsec) {
+      if (dailyPnLUSD <= -maxDailyLoss) {
+        // إغلاق تام لليوم بالكامل في حال تجاوز الحد الأقصى للخسارة المالية اليومية
         circuitBreakerTriggered = true;
-        circuitBreakerReason = `تم تسجيل ${consecLosses} خسائر متتالية اليوم (الحد الأقصى ${maxConsec})`;
-      } else if (dailyPnLUSD <= -maxDailyLoss) {
-        circuitBreakerTriggered = true;
-        circuitBreakerReason = `تجاوز الحد الأقصى للخسارة اليومية: -$${Math.abs(dailyPnLUSD).toFixed(2)} (الحد الأقصى -$${maxDailyLoss.toFixed(2)})`;
+        circuitBreakerReason = `تجاوز الحد الأقصى للخسارة اليومية: -$${Math.abs(dailyPnLUSD).toFixed(2)} (الحد الأقصى -$${maxDailyLoss.toFixed(2)}). توقف كامل حتى منتصف الليل (00:00 UTC).`;
+      } else if (consecLosses >= maxConsec && lastLossClosedAt) {
+        // فترة تبريد ذكية (Smart Cool-down) عند 3 خسائر متتالية
+        const elapsedMs = Date.now() - lastLossClosedAt.getTime();
+        const coolDownMs = coolDownMin * 60 * 1000;
+        if (elapsedMs < coolDownMs) {
+          const remainingMin = Math.ceil((coolDownMs - elapsedMs) / 60000);
+          circuitBreakerTriggered = true;
+          circuitBreakerReason = `فترة تبريد ذكية نشطة (Cool-down) بعد ${consecLosses} خسائر متتالية. متبقي ${remainingMin} دقيقة لتهدئة السوق واستئناف التداول تلقائياً.`;
+        } else {
+          logs.push(`[COOL-DOWN EXPIRED] فترة التبريد (${coolDownMin} دقيقة) انتهت، ويتم استئناف التداول للجلسة التالية.`);
+        }
       }
 
       if (circuitBreakerTriggered) {
-        const breakerLogMsg = `⛔ [CIRCUIT BREAKER] قاطع الدائرة اليومي نشط: ${circuitBreakerReason}. تم إيقاف فتح أي صفقات جديدة حتى منتصف الليل (00:00 UTC).`;
+        const breakerLogMsg = `⛔ [CIRCUIT BREAKER] قاطع الدائرة اليومي نشط: ${circuitBreakerReason}`;
         logs.push(breakerLogMsg);
         console.warn(breakerLogMsg);
       }

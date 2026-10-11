@@ -23,11 +23,14 @@ export const RISK_PERCENT: number = 2.0;
 // أقصى خسارة مسموح بها للصفقة الواحدة بالدولار لحماية الحساب من قفزات الـ ATR العنيفة
 export const MAX_TRADE_RISK_USD: number = 7.00; // سقف الخسارة 7.00$ للصفقة (يسمح بحركة الذهب الطبيعية والنشطة ويمنع قفزات الأخبار العنيفة 10$-14$)
 
-// قاطع الدائرة اليومي: أقصى خسارة يومية مسموح بها قبل إيقاف البوت آلياً
-export const MAX_DAILY_LOSS_USD: number = 10.00; // سقف الخسارة اليومية 10.00$ (يحمي 90% من الحساب)
+// قاطع الدائرة اليومي: أقصى خسارة يومية مسموح بها قبل إيقاف البوت آلياً حتى منتصف الليل
+export const MAX_DAILY_LOSS_USD: number = 12.00; // سقف الخسارة اليومية 12.00$ (يحمي ما لا يقل عن 88-90% من الحساب)
 
-// قاطع الدائرة اليومي: أقصى عدد خسائر متتالية مسموح به في اليوم
-export const MAX_CONSECUTIVE_LOSSES: number = 3; // إيقاف فوري عند 3 خسائر متتالية
+// قاطع الدائرة: أقصى عدد خسائر متتالية مسموح به لتفعيل فترة التبريد الذكية
+export const MAX_CONSECUTIVE_LOSSES: number = 3; // تفعيل فترة تبريد ذكية عند 3 خسائر متتالية
+
+// مدة فترة التبريد الذكية بالدقائق عند 3 خسائر متتالية (بدلاً من الإغلاق الكامل لـ 24 ساعة)
+export const COOL_DOWN_MINUTES: number = 150; // ساعتان ونصف (150 دقيقة) تبريد لتهدئة السوق المتذبذب
 
 // ============================================================================
 // ⚠️ 3. مواصفات العقود وقيمة النقطة (Contract Size & Tick Value)
@@ -133,6 +136,14 @@ export function getMaxConsecutiveLosses(): number {
     if (!isNaN(parsed) && parsed > 0) return parsed;
   }
   return MAX_CONSECUTIVE_LOSSES;
+}
+
+export function getCoolDownMinutes(): number {
+  if (process.env.COOL_DOWN_MINUTES) {
+    const parsed = parseInt(process.env.COOL_DOWN_MINUTES, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return COOL_DOWN_MINUTES;
 }
 
 /**
