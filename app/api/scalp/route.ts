@@ -81,7 +81,7 @@ interface SessionFilterConfig {
 
 const SESSION_FILTERS: Record<string, SessionFilterConfig> = {
   'EUR/USD': { enabled: true, startHourCairo: 0, endHourCairo: 8 },  // Block Asian session 00:00 - 08:00 Cairo
-  'XAU/USD': { enabled: true, startHourCairo: 2, endHourCairo: 19 }, // Tokyo Open Window + London + NY Overlap: 02:00 - 19:00 Cairo
+  'XAU/USD': { enabled: true, startHourCairo: 0, endHourCairo: 24 }, // 24 Hours on normal weekdays (with Monday 05:00 UTC guard)
   'QQQ': { enabled: false, startHourCairo: 16.5, endHourCairo: 23.0 }
 };
 
@@ -94,21 +94,43 @@ function isFridayBlocked(symbol: string, date: Date = new Date()): boolean {
   return false;
 }
 
-function isSessionAllowed(symbol: string, date: Date = new Date()): boolean {
+function isSessionAllowed(symbol: string, date: Date = new Date()): { allowed: boolean; reason?: string } {
   const norm = normalizeSymbol(symbol).symbol;
-  const filter = SESSION_FILTERS[norm];
-  if (!filter || !filter.enabled) return true;
-
+  const utcDay = date.getUTCDay();
   const utcHours = date.getUTCHours();
+
+  if (norm === 'XAU/USD') {
+    // 🛡️ تدقيق يوم الاثنين: حظر فجر الاثنين حتى 05:00 UTC (08:00 ص بتوقيت القاهرة) لتفادي فجوات الافتتاح واتساع السبريد
+    if (utcDay === 1 && utcHours < 5) {
+      return {
+        allowed: false,
+        reason: `🛡️ [XAU/USD] Monday Open Guard Active: تم حظر التداول فجر الاثنين حتى 05:00 UTC (08:00 ص بتوقيت القاهرة) لامتصاص فجوات الويكند وتفادي اتساع السبريد.`
+      };
+    }
+    // باقي أيام الأسبوع من الثلاثاء للخميس: تداول مفتوح 24 ساعة
+    return { allowed: true };
+  }
+
+  const filter = SESSION_FILTERS[norm];
+  if (!filter || !filter.enabled) return { allowed: true };
+
   const utcMinutes = date.getUTCMinutes();
   const cairoDecimalHour = ((utcHours + 3) % 24) + (utcMinutes / 60);
 
   if (norm === 'EUR/USD') {
     // BLOCK_BETWEEN 00:00 and 08:00
-    return !(cairoDecimalHour >= filter.startHourCairo && cairoDecimalHour < filter.endHourCairo);
+    const blocked = cairoDecimalHour >= filter.startHourCairo && cairoDecimalHour < filter.endHourCairo;
+    return {
+      allowed: !blocked,
+      reason: blocked ? `[EUR/USD] Asian session blocked (00:00 - 08:00 Cairo).` : undefined
+    };
   }
-  // ALLOW_BETWEEN
-  return cairoDecimalHour >= filter.startHourCairo && cairoDecimalHour < filter.endHourCairo;
+
+  const allowed = cairoDecimalHour >= filter.startHourCairo && cairoDecimalHour < filter.endHourCairo;
+  return {
+    allowed,
+    reason: !allowed ? `[${symbol}] Outside allowed trading session.` : undefined
+  };
 }
 
 function isCryptoPair(symbol: string): boolean {
@@ -314,7 +336,7 @@ async function runScalperEngine() {
             const hardSlMult = isQQQ ? 2.5 : 3.0;
             const atrVal = trade.atr || (Math.abs(trade.sl - trade.entryPrice) / 1.5);
             const hardSl = trade.breakevenApplied
-              ? trade.entryPrice
+              ? trade.sl
               : (trade.action === 'BUY' ? trade.entryPrice - (atrVal * hardSlMult) : trade.entryPrice + (atrVal * hardSlMult));
 
             if (trade.action === 'BUY') {
@@ -323,14 +345,14 @@ async function runScalperEngine() {
               const softSlHit = currentPrice <= trade.sl; // Soft stop on candle CLOSE
 
               if (hardSlHit) {
-                newStatus = trade.breakevenApplied && Math.abs(hardSl - trade.entryPrice) < 0.05 ? 'BREAKEVEN' : 'LOSS';
                 exitPrice = hardSl;
+                newStatus = 'LOSS';
               } else if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
               } else if (softSlHit) {
-                newStatus = trade.breakevenApplied && Math.abs(trade.sl - trade.entryPrice) < 0.05 ? 'BREAKEVEN' : 'LOSS';
                 exitPrice = trade.sl;
+                newStatus = 'LOSS';
               }
             } else if (trade.action === 'SELL') {
               const hardSlHit = candleHigh >= hardSl;
@@ -338,14 +360,14 @@ async function runScalperEngine() {
               const softSlHit = currentPrice >= trade.sl; // Soft stop on candle CLOSE
 
               if (hardSlHit) {
-                newStatus = trade.breakevenApplied && Math.abs(hardSl - trade.entryPrice) < 0.05 ? 'BREAKEVEN' : 'LOSS';
                 exitPrice = hardSl;
+                newStatus = 'LOSS';
               } else if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
               } else if (softSlHit) {
-                newStatus = trade.breakevenApplied && Math.abs(trade.sl - trade.entryPrice) < 0.05 ? 'BREAKEVEN' : 'LOSS';
                 exitPrice = trade.sl;
+                newStatus = 'LOSS';
               }
             }
 
@@ -357,9 +379,13 @@ async function runScalperEngine() {
               const rawDiff = trade.action === 'BUY' ? (exitPrice - trade.entryPrice) : (trade.entryPrice - exitPrice);
               const pnlPoints = Number(rawDiff.toFixed(2));
 
-              // If price exited at entry price with breakeven applied, guarantee status is BREAKEVEN
-              if (trade.breakevenApplied && (pnlPoints === 0 || Math.abs(rawDiff) < 0.05)) {
+              // Evaluate final status based on rawDiff:
+              if (rawDiff > 0.05) {
+                newStatus = 'WIN'; // Profit locked exit is a WIN!
+              } else if (Math.abs(rawDiff) <= 0.05) {
                 newStatus = 'BREAKEVEN';
+              } else {
+                newStatus = 'LOSS';
               }
 
               const spec = getSymbolSpec(trade.symbol);
@@ -423,8 +449,11 @@ async function runScalperEngine() {
               const pnlPrefix = netPnLUSD > 0 ? '+' : '';
               const feeText = tradingFeeUSD > 0 ? `\n📉 تكلفة التداول (سبريد وانزلاق): -$${tradingFeeUSD.toFixed(2)}` : '';
               const balanceText = `\n🏦 **رصيد الحساب الآن:** $${updatedBal.toFixed(2)} (${pnlPrefix}$${netPnLUSD.toFixed(2)})`;
+              const isProfitLocked = newStatus === 'WIN' && trade.breakevenApplied && exitPrice !== trade.tp;
               const outcomeText = newStatus === 'WIN'
-                ? `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة الصافية: ${pnlPrefix}$${netPnLUSD.toFixed(2)} (${pnlPoints > 0 ? '+' : ''}${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}${balanceText}`
+                ? (isProfitLocked
+                  ? `🎯 **تأمين الربح المحجوز بنجاح! (PROFIT LOCKED WIN)** 🔒\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة الصافية: +$${netPnLUSD.toFixed(2)} (+${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}${balanceText}`
+                  : `🎯 **تم تحقيق الهدف بالكامل! (TP HIT)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة الصافية: ${pnlPrefix}$${netPnLUSD.toFixed(2)} (${pnlPoints > 0 ? '+' : ''}${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}${balanceText}`)
                 : (newStatus === 'BREAKEVEN'
                   ? `🛡️ **خروج على نقطة التعادل! (BREAKEVEN)** ⚖️\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة: -$${tradingFeeUSD.toFixed(2)} (تكلفة السبريد) | الحجم: ${lotSize.toFixed(2)} لوت${balanceText}`
                   : `🛡 **ضرب وقف الخسارة! (LOSS)** 📉\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة الصافية: -$${Math.abs(netPnLUSD).toFixed(2)} (${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}${balanceText}`);
@@ -476,7 +505,7 @@ async function runScalperEngine() {
               // Advanced Trade Management: Breakeven & Time Stop
               // -------------------------------------------------------------
 
-              // 1. Breakeven Logic (Move SL to Entry Price at >= 75% TP progress for Gold, 60% for others)
+              // 1. Profit Lock & Breakeven Logic (Lock +1.50 points profit at >= 75% TP progress for Gold, standard BE for others)
               if (!trade.breakevenApplied) {
                 const beRatio = matchingItem.symbol === 'XAU/USD' ? 0.75 : 0.6;
                 let isBeReached = false;
@@ -494,14 +523,24 @@ async function runScalperEngine() {
                 }
 
                 if (isBeReached) {
-                  trade.sl = trade.entryPrice;
+                  if (matchingItem.symbol === 'XAU/USD') {
+                    // Lock in +1.50 points profit for Gold
+                    const lockPoints = 1.50;
+                    trade.sl = trade.action === 'BUY'
+                      ? Number((trade.entryPrice + lockPoints).toFixed(2))
+                      : Number((trade.entryPrice - lockPoints).toFixed(2));
+                  } else {
+                    trade.sl = trade.entryPrice;
+                  }
                   trade.breakevenApplied = true;
                   await trade.save();
 
-                  const breakevenMsg = `🛡️ (BREAKEVEN) Risk Free! SL moved to Entry Price for ${trade.symbol}.`;
-                  logs.push(breakevenMsg);
-                  console.log(breakevenMsg);
-                  await sendTelegramNotification(breakevenMsg);
+                  const lockMsg = matchingItem.symbol === 'XAU/USD'
+                    ? `🔒 **تأمين الأرباح (Profit Lock +1.5 pts)** 🎯\n- الأصل: ${trade.symbol}\n- تم حجز ربح +1.50 نقطة كاش بعد قطع 75% من مسار الهدف بنجاح!\n- الوقف الجديد: $${formatPrice(trade.sl)} (مضمون ربح حتى في حال ارتداد السعر)`
+                    : `🛡️ (BREAKEVEN) Risk Free! SL moved to Entry Price for ${trade.symbol}.`;
+                  logs.push(lockMsg);
+                  console.log(lockMsg);
+                  await sendTelegramNotification(lockMsg);
                 }
               }
 
@@ -786,8 +825,9 @@ async function runScalperEngine() {
       }
 
       // Session Filter Check
-      if (!isSessionAllowed(symbol)) {
-        const sessMsg = `[${symbol}] Outside allowed trading session. Skipping.`;
+      const sessionCheck = isSessionAllowed(symbol);
+      if (!sessionCheck.allowed) {
+        const sessMsg = sessionCheck.reason || `[${symbol}] Outside allowed trading session. Skipping.`;
         logs.push(sessMsg);
         return { symbol, signalTriggered: false, skipped: true, reason: sessMsg };
       }
@@ -827,7 +867,8 @@ async function runScalperEngine() {
         return { symbol, signalTriggered: false, skipped: true, reason: skipCapMsg };
       }
 
-      // 🤖 Groq AI Gatekeeper: فحص جودة وتوافق الإشارة قبل التنفيذ
+      // 🤖 Groq AI Gatekeeper: فحص جودة وتوافق الإشارة قبل التنفيذ (مع تدقيق إضافي يوم الاثنين)
+      const isMondayToday = new Date().getUTCDay() === 1;
       const groqValidation = await validateTradeConfluenceWithGroq({
         symbol,
         action: signalType,
@@ -838,7 +879,8 @@ async function runScalperEngine() {
         rsi: currentRsi,
         ema20: currentEma20,
         ema100: currentEma100,
-        atr: currentAtr
+        atr: currentAtr,
+        isMonday: isMondayToday
       });
 
       if (!groqValidation.approved) {

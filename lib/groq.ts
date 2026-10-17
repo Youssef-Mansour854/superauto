@@ -162,6 +162,7 @@ export interface TradeValidationData {
   ema20: number;
   ema100: number;
   atr: number;
+  isMonday?: boolean;
 }
 
 export interface TradeValidationResult {
@@ -173,7 +174,7 @@ export interface TradeValidationResult {
 /**
  * 🤖 Groq AI Trade Confluence & Gatekeeper
  * يفحص جودة الإشارة الفنية ويقيمها من 1 إلى 10 قبل الدخول.
- * لو التقييم أقل من 7 أو في خطر تذبذب/تشبع يتم رفض الصفقة لحماية الحساب.
+ * لو التقييم أقل من 7.0 (أو 7.5 يوم الاثنين لتدقيق فجوات الافتتاح) يتم رفض الصفقة لحماية الحساب.
  */
 export async function validateTradeConfluenceWithGroq(data: TradeValidationData): Promise<TradeValidationResult> {
   const apiKey = process.env.GROQ_API_KEY;
@@ -202,6 +203,10 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
   "reason": "سبب التقييم بالعربية في جملة واحدة"
 }`;
 
+  const mondayInstruction = data.isMonday
+    ? `\n⚠️ ملاحظة خاصة: اليوم هو يوم الاثنين (افتتاح أسبوع التداول). كن فائق الصرامة والتدقيق لمخاطر فجوات نهاية الأسبوع (Gaps) وتذبذبات الافتتاح، ولا توافق إلا إذا كانت الإشارة مثالية بنسبة 100% (الموافقة يوم الاثنين تتطلب تقييم 7.5 أو أعلى).`
+    : '';
+
   const userPrompt = `
 قم بتقييم إشارة السكالبينج التالية لـ ${data.symbol}:
 - نوع الصفقة: ${data.action} (${data.triggerReason === 'PULLBACK' ? 'ارتداد EMA20' : 'تقاطع زخم RSI'})
@@ -209,13 +214,13 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
 - Stop Loss: $${formatPrice(data.sl)} | Take Profit: $${formatPrice(data.tp)}
 - RSI (14): ${formatPrice(data.rsi)}
 - EMA 20: $${formatPrice(data.ema20)} | EMA 100: $${formatPrice(data.ema100)}
-- ATR (14): $${formatPrice(data.atr)}
+- ATR (14): $${formatPrice(data.atr)}${mondayInstruction}
 
 شروط التقييم الصارم:
-- اعطِ درجة من 1 إلى 10 (الموافقة فقط إذا كان التقييم 7 أو أعلى).
+- اعطِ درجة من 1 إلى 10 (${data.isMonday ? 'الموافقة يوم الاثنين تتطلب 7.5 أو أعلى' : 'الموافقة العادية تتطلب 7.0 أو أعلى'}).
 - إذا كانت الصفقة BUY و RSI > 65، أو السعر متضخم وبعيد عن EMA20 -> ارفض (Score < 7).
 - إذا كانت الصفقة SELL و RSI < 35، أو السعر منخفض جداً وبعيد عن EMA20 -> ارفض (Score < 7).
-- إذا كانت الشموع متوافقة مع الاتجاه والـ RSI متزن ومسافة الـ SL مناسبة -> وافق (Score >= 7).
+- إذا كانت الشموع متوافقة مع الاتجاه والـ RSI متزن ومسافة الـ SL مناسبة -> وافق.
 أخرج كود JSON فقط.
 `;
 
@@ -246,7 +251,8 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
 
     const parsed = JSON.parse(rawContent);
     const score = typeof parsed.score === 'number' ? parsed.score : (parsed.approved ? 7.5 : 5.0);
-    const approved = Boolean(parsed.approved) && score >= 7.0;
+    const minScoreRequired = data.isMonday ? 7.5 : 7.0;
+    const approved = Boolean(parsed.approved) && score >= minScoreRequired;
     const reason = parsed.reason || (approved ? 'تمت الموافقة من Groq AI' : 'تم الرفض بواسطة Groq AI');
 
     return { approved, score, reason };
