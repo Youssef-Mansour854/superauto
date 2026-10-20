@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { connectToDatabase } from '@/lib/mongodb';
 import Trade from '@/models/Trade';
 import TradeHistory from '@/models/TradeHistory';
+import AccountState from '@/models/AccountState';
 import DataFeedStatus from '@/models/DataFeedStatus';
 import { fetchBinanceKlines, Candle } from '@/lib/binance';
 import { fetchTwelveData5mKlines, CandleFetchResult } from '@/lib/twelvedata';
@@ -100,14 +101,14 @@ function isSessionAllowed(symbol: string, date: Date = new Date()): { allowed: b
   const utcHours = date.getUTCHours();
 
   if (norm === 'XAU/USD') {
-    // 🛡️ تدقيق يوم الاثنين: حظر فجر الاثنين حتى 05:00 UTC (08:00 ص بتوقيت القاهرة) لتفادي فجوات الافتتاح واتساع السبريد
-    if (utcDay === 1 && utcHours < 5) {
+    // 🛡️ حظر فجر السوق حتى 05:00 UTC (08:00 ص بتوقيت القاهرة) لتفادي فجوات الافتتاح وضعف السيولة واتساع السبريد
+    if (utcHours < 5) {
       return {
         allowed: false,
-        reason: `🛡️ [XAU/USD] Monday Open Guard Active: تم حظر التداول فجر الاثنين حتى 05:00 UTC (08:00 ص بتوقيت القاهرة) لامتصاص فجوات الويكند وتفادي اتساع السبريد.`
+        reason: `🛡️ [XAU/USD] Dawn Filter Active: تم حظر التداول فجراً حتى 05:00 UTC (08:00 ص بتوقيت القاهرة) لتفادي ضعف السيولة والتذبذب العشوائي في افتتاح آسيا.`
       };
     }
-    // باقي أيام الأسبوع من الثلاثاء للخميس: تداول مفتوح 24 ساعة
+    // باقي ساعات اليوم (جلسة لندن ونيويورك بالكامل): تداول مفتوح
     return { allowed: true };
   }
 
@@ -465,8 +466,12 @@ async function runScalperEngine() {
                   const startOfDay = new Date();
                   startOfDay.setUTCHours(0, 0, 0, 0);
 
+                  const accountDoc = await AccountState.findOne({ accountId: 'default' });
+                  const cbResetAt = accountDoc?.circuitBreakerResetAt ? new Date(accountDoc.circuitBreakerResetAt) : null;
+                  const filterStartTime = (cbResetAt && cbResetAt.getTime() > startOfDay.getTime()) ? cbResetAt : startOfDay;
+
                   const recentToday = await TradeHistory.find({
-                    closedAt: { $gte: startOfDay }
+                    closedAt: { $gte: filterStartTime }
                   }).sort({ closedAt: -1 }).limit(10);
 
                   let consecLosses = 0;
@@ -478,7 +483,7 @@ async function runScalperEngine() {
                   }
 
                   let dailyPnL = 0;
-                  const allToday = await TradeHistory.find({ closedAt: { $gte: startOfDay } });
+                  const allToday = await TradeHistory.find({ closedAt: { $gte: filterStartTime } });
                   for (const t of allToday) {
                     dailyPnL += (t.netPnLUSD || 0);
                   }
@@ -652,8 +657,12 @@ async function runScalperEngine() {
       const startOfDay = new Date();
       startOfDay.setUTCHours(0, 0, 0, 0);
 
+      const accountDoc = await AccountState.findOne({ accountId: 'default' });
+      const cbResetAt = accountDoc?.circuitBreakerResetAt ? new Date(accountDoc.circuitBreakerResetAt) : null;
+      const filterStartTime = (cbResetAt && cbResetAt.getTime() > startOfDay.getTime()) ? cbResetAt : startOfDay;
+
       const todayClosedTrades = await TradeHistory.find({
-        closedAt: { $gte: startOfDay }
+        closedAt: { $gte: filterStartTime }
       }).sort({ closedAt: -1 });
 
       let consecLosses = 0;

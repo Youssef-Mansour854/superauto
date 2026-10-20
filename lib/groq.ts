@@ -203,9 +203,7 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
   "reason": "سبب التقييم بالعربية في جملة واحدة"
 }`;
 
-  const mondayInstruction = data.isMonday
-    ? `\n⚠️ ملاحظة خاصة: اليوم هو يوم الاثنين (افتتاح أسبوع التداول). كن فائق الصرامة والتدقيق لمخاطر فجوات نهاية الأسبوع (Gaps) وتذبذبات الافتتاح، ولا توافق إلا إذا كانت الإشارة مثالية بنسبة 100% (الموافقة يوم الاثنين تتطلب تقييم 7.5 أو أعلى).`
-    : '';
+  const mondayInstruction = `\n⚠️ ملاحظة خاصة: كن فائق الصرامة والتدقيق لمخاطر التذبذب العرضي وضعف السيولة، ولا توافق إلا إذا كانت الإشارة مثالية بنسبة 100% (الموافقة تتطلب تقييم 7.5 أو أعلى دائماً).`;
 
   const userPrompt = `
 قم بتقييم إشارة السكالبينج التالية لـ ${data.symbol}:
@@ -217,9 +215,9 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
 - ATR (14): $${formatPrice(data.atr)}${mondayInstruction}
 
 شروط التقييم الصارم:
-- اعطِ درجة من 1 إلى 10 (${data.isMonday ? 'الموافقة يوم الاثنين تتطلب 7.5 أو أعلى' : 'الموافقة العادية تتطلب 7.0 أو أعلى'}).
-- إذا كانت الصفقة BUY و RSI > 65، أو السعر متضخم وبعيد عن EMA20 -> ارفض (Score < 7).
-- إذا كانت الصفقة SELL و RSI < 35، أو السعر منخفض جداً وبعيد عن EMA20 -> ارفض (Score < 7).
+- اعطِ درجة من 1 إلى 10 (الموافقة تتطلب تقييم صارم 7.5 أو أعلى).
+- إذا كانت الصفقة BUY و RSI > 65، أو السعر متضخم وبعيد عن EMA20 -> ارفض (Score < 7.5).
+- إذا كانت الصفقة SELL و RSI < 35، أو السعر منخفض جداً وبعيد عن EMA20 -> ارفض (Score < 7.5).
 - إذا كانت الشموع متوافقة مع الاتجاه والـ RSI متزن ومسافة الـ SL مناسبة -> وافق.
 أخرج كود JSON فقط.
 `;
@@ -251,7 +249,7 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
 
     const parsed = JSON.parse(rawContent);
     const score = typeof parsed.score === 'number' ? parsed.score : (parsed.approved ? 7.5 : 5.0);
-    const minScoreRequired = data.isMonday ? 7.5 : 7.0;
+    const minScoreRequired = 7.5;
     const approved = Boolean(parsed.approved) && score >= minScoreRequired;
     const reason = parsed.reason || (approved ? 'تمت الموافقة من Groq AI' : 'تم الرفض بواسطة Groq AI');
 

@@ -9,6 +9,7 @@ export interface IAccountState extends Document {
   winsCount: number;
   lossesCount: number;
   breakevenCount: number;
+  circuitBreakerResetAt?: Date;
   lastTradeId?: string;
   lastTradePnL?: number;
   updatedAt: Date;
@@ -23,6 +24,7 @@ const AccountStateSchema: Schema = new Schema<IAccountState>({
   winsCount: { type: Number, default: 0 },
   lossesCount: { type: Number, default: 0 },
   breakevenCount: { type: Number, default: 0 },
+  circuitBreakerResetAt: { type: Date },
   lastTradeId: { type: String },
   lastTradePnL: { type: Number },
   updatedAt: { type: Date, default: Date.now }
