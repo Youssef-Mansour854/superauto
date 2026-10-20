@@ -108,6 +108,13 @@ function isSessionAllowed(symbol: string, date: Date = new Date()): { allowed: b
         reason: `🛡️ [XAU/USD] Dawn Filter Active: تم حظر التداول فجراً حتى 05:00 UTC (08:00 ص بتوقيت القاهرة) لتفادي ضعف السيولة والتذبذب العشوائي في افتتاح آسيا.`
       };
     }
+    // 🛡️ حظر فترة إغلاق وتسوية السوق الليلي 22:00 - 00:00 UTC (01:00 - 03:00 ص بتوقيت القاهرة) لتفادي اتساع السبريد وانعدام السيولة
+    if (utcHours >= 22) {
+      return {
+        allowed: false,
+        reason: `🛡️ [XAU/USD] Night Session Filter: تم إيقاف البحث عن صفقات ليلاً (22:00 - 00:00 UTC) بسبب انتهاء جلسة نيويورك واتساع السبريد وضعف السيولة.`
+      };
+    }
     // باقي ساعات اليوم (جلسة لندن ونيويورك بالكامل): تداول مفتوح
     return { allowed: true };
   }
@@ -181,8 +188,10 @@ function isSymbolMarketOpen(symbol: string, date: Date = new Date()): boolean {
   }
 
   if (norm.includes('XAU') || norm.includes('GOLD')) {
-    // Gold spot market: Mon 00:00 UTC to Fri 21:00 UTC
-    if (utcDay === 5 && date.getUTCHours() >= 21) return false;
+    // Gold spot market: active between 05:00 UTC and 22:00 UTC (Mon-Thu)
+    if (utcDay === 5) return false; // Friday is blocked
+    const utcHours = date.getUTCHours();
+    if (utcHours < 5 || utcHours >= 22) return false; // Dawn and night settlement closed
     return true;
   }
 
@@ -812,6 +821,14 @@ async function runScalperEngine() {
         return { symbol, signalTriggered: false, skipped: true, reason: fridayMsg };
       }
 
+      // Session Filter Check BEFORE fetching candles (saves API calls during dawn & night)
+      const sessionCheck = isSessionAllowed(symbol);
+      if (!sessionCheck.allowed) {
+        const sessMsg = sessionCheck.reason || `[${symbol}] Outside allowed trading session. Skipping.`;
+        logs.push(sessMsg);
+        return { symbol, signalTriggered: false, skipped: true, reason: sessMsg };
+      }
+
       if (dbConnected) {
         const matchingSymbols = [symbol, symbol.replace('/', ''), symbol.replace('/', '-'), `^${symbol}`, symbol.replace('^', '')];
         const activeTrade = await Trade.findOne({
@@ -916,14 +933,6 @@ async function runScalperEngine() {
           slDistance: Number((currentAtr * 1.5).toFixed(2)),
           maxRiskCapUSD: getMaxTradeRiskUSD()
         };
-      }
-
-      // Session Filter Check
-      const sessionCheck = isSessionAllowed(symbol);
-      if (!sessionCheck.allowed) {
-        const sessMsg = sessionCheck.reason || `[${symbol}] Outside allowed trading session. Skipping.`;
-        logs.push(sessMsg);
-        return { symbol, signalTriggered: false, skipped: true, reason: sessMsg };
       }
 
       logs.push(`🚨 ${signalType} Scalp Signal Triggered for ${symbol}! (${triggerReason})`);
