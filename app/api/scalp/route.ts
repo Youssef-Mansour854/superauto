@@ -341,31 +341,31 @@ async function runScalperEngine() {
               : (trade.action === 'BUY' ? trade.entryPrice - (atrVal * hardSlMult) : trade.entryPrice + (atrVal * hardSlMult));
 
             if (trade.action === 'BUY') {
-              const hardSlHit = candleLow <= hardSl;
               const tpHit = candleHigh >= trade.tp;
+              const hardSlHit = candleLow <= hardSl;
               const softSlHit = currentPrice <= trade.sl; // Soft stop on candle CLOSE
 
-              if (hardSlHit) {
-                exitPrice = hardSl;
-                newStatus = 'LOSS';
-              } else if (tpHit) {
+              if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
+              } else if (hardSlHit) {
+                exitPrice = hardSl;
+                newStatus = 'LOSS';
               } else if (softSlHit) {
                 exitPrice = trade.sl;
                 newStatus = 'LOSS';
               }
             } else if (trade.action === 'SELL') {
-              const hardSlHit = candleHigh >= hardSl;
               const tpHit = candleLow <= trade.tp;
+              const hardSlHit = candleHigh >= hardSl;
               const softSlHit = currentPrice >= trade.sl; // Soft stop on candle CLOSE
 
-              if (hardSlHit) {
-                exitPrice = hardSl;
-                newStatus = 'LOSS';
-              } else if (tpHit) {
+              if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
+              } else if (hardSlHit) {
+                exitPrice = hardSl;
+                newStatus = 'LOSS';
               } else if (softSlHit) {
                 exitPrice = trade.sl;
                 newStatus = 'LOSS';
@@ -546,6 +546,74 @@ async function runScalperEngine() {
                   logs.push(lockMsg);
                   console.log(lockMsg);
                   await sendTelegramNotification(lockMsg);
+
+                  // فحص خروج فوري لحظي: إذا كان السعر قد ارتد بالفعل ولمس أو كسر الوقف المؤمن الجديد
+                  const lockedSlHit = trade.action === 'BUY'
+                    ? (candleLow <= trade.sl || currentPrice <= trade.sl)
+                    : (candleHigh >= trade.sl || currentPrice >= trade.sl);
+
+                  if (lockedSlHit) {
+                    const exitPrice = trade.sl;
+                    const closedAt = new Date();
+                    const rawDiff = trade.action === 'BUY' ? (exitPrice - trade.entryPrice) : (trade.entryPrice - exitPrice);
+                    const pnlPoints = Number(rawDiff.toFixed(2));
+                    const finalStatus: 'WIN' | 'BREAKEVEN' = pnlPoints > 0.05 ? 'WIN' : 'BREAKEVEN';
+                    const spec = getSymbolSpec(trade.symbol);
+                    const lotSize = trade.suggestedLotSize || calculatePositionSize(trade.entryPrice, trade.sl, currentLiveBal, undefined, spec.contractSize).lotSize;
+                    const pnlBreakdown = calculateDetailedPnL(pnlPoints, lotSize, trade.symbol, finalStatus === 'BREAKEVEN');
+                    const netPnLUSD = pnlBreakdown.netPnLUSD;
+                    const grossPnLUSD = pnlBreakdown.grossPnLUSD;
+                    const tradingFeeUSD = pnlBreakdown.tradingFeeUSD;
+
+                    const accountUpdate = await applyTradeResultToAccount(netPnLUSD, finalStatus, trade._id.toString());
+                    const updatedBal = accountUpdate.newBalance;
+                    currentLiveBal = updatedBal;
+
+                    await TradeHistory.create({
+                      tradeId: trade._id.toString(),
+                      symbol: trade.symbol,
+                      action: trade.action,
+                      tradeType: trade.tradeType,
+                      entryPrice: trade.entryPrice,
+                      exitPrice,
+                      sl: trade.sl,
+                      tp: trade.tp,
+                      status: finalStatus,
+                      suggestedLotSize: lotSize,
+                      pnlPoints,
+                      pnlUSD: netPnLUSD,
+                      grossPnLUSD,
+                      tradingFeeUSD,
+                      netPnLUSD,
+                      balanceAfterTrade: updatedBal,
+                      rsi: trade.rsi,
+                      ema20: trade.ema20,
+                      ema100: trade.ema100 || trade.ema200,
+                      atr: trade.atr,
+                      groqAnalysis: trade.groqAnalysis,
+                      entryTimestamp: trade.timestamp,
+                      closedAt
+                    });
+
+                    trade.status = 'ARCHIVED';
+                    trade.exitPrice = exitPrice;
+                    trade.suggestedLotSize = lotSize;
+                    trade.pnlPoints = pnlPoints;
+                    trade.pnlUSD = netPnLUSD;
+                    trade.grossPnLUSD = grossPnLUSD;
+                    trade.tradingFeeUSD = tradingFeeUSD;
+                    trade.netPnLUSD = netPnLUSD;
+                    trade.balanceAfterTrade = updatedBal;
+                    trade.closedAt = closedAt;
+                    await trade.save();
+
+                    const pnlPrefix = netPnLUSD > 0 ? '+' : '';
+                    const feeText = tradingFeeUSD > 0 ? `\n📉 تكلفة التداول (سبريد وانزلاق): -$${tradingFeeUSD.toFixed(2)}` : '';
+                    const balanceText = `\n🏦 **رصيد الحساب الآن:** $${updatedBal.toFixed(2)} (${pnlPrefix}$${netPnLUSD.toFixed(2)})`;
+                    const outcomeText = `🎯 **تأمين الربح المحجوز بنجاح! (PROFIT LOCKED WIN)** 🔒\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة الصافية: +$${netPnLUSD.toFixed(2)} (+${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}${balanceText}`;
+                    await sendTelegramNotification(outcomeText);
+                    logs.push(`Scalp trade ${trade._id} exited immediately on locked SL with ${finalStatus}`);
+                  }
                 }
               }
 
@@ -745,12 +813,29 @@ async function runScalperEngine() {
       }
 
       if (dbConnected) {
+        const matchingSymbols = [symbol, symbol.replace('/', ''), symbol.replace('/', '-'), `^${symbol}`, symbol.replace('^', '')];
         const activeTrade = await Trade.findOne({
-          symbol: { $in: [symbol, symbol.replace('/', ''), symbol.replace('/', '-'), `^${symbol}`, symbol.replace('^', '')] },
+          symbol: { $in: matchingSymbols },
           status: 'ALERT_SENT'
         });
         if (activeTrade) {
           const skipMsg = `Active trade exists for ${symbol}, skipping new entry evaluation.`;
+          console.log(skipMsg);
+          logs.push(skipMsg);
+          return { symbol, signalTriggered: false, skipped: true, reason: skipMsg };
+        }
+
+        // 🛡️ تفادي التكرار عند تشغيل الكرون بتردد عالي (كل دقيقة): منع فتح أكثر من صفقة لنفس الرمز خلال نفس الـ 5 دقائق
+        const FIVE_MINUTES_AGO = new Date(Date.now() - 5 * 60 * 1000);
+        const recentClosedTrade = await TradeHistory.findOne({
+          symbol: { $in: matchingSymbols },
+          $or: [
+            { entryTimestamp: { $gte: FIVE_MINUTES_AGO } },
+            { closedAt: { $gte: FIVE_MINUTES_AGO } }
+          ]
+        });
+        if (recentClosedTrade) {
+          const skipMsg = `[${symbol}] تم إغلاق صفقة مؤخراً خلال الـ 5 دقائق الماضية. في انتظار اكتمال دورة الشمعة التالية لتفادي الدخول المزدوج.`;
           console.log(skipMsg);
           logs.push(skipMsg);
           return { symbol, signalTriggered: false, skipped: true, reason: skipMsg };
@@ -933,9 +1018,22 @@ async function runScalperEngine() {
         }
       }
 
+      // Calculate advance Profit Lock levels (75% TP trigger & +1.50 pts locked SL for Gold)
+      const isGold = normSym === 'XAU/USD';
+      const beRatio = isGold ? 0.75 : 0.60;
+      const lockTriggerPrice = signalType === 'BUY'
+        ? currentClose + beRatio * (tp - currentClose)
+        : currentClose - beRatio * (currentClose - tp);
+      const lockSlPrice = isGold
+        ? (signalType === 'BUY' ? currentClose + 1.50 : currentClose - 1.50)
+        : currentClose;
+
       // Send Telegram Alert
       const entryTypeArabic = triggerReason === 'PULLBACK' ? 'ارتداد وإعادة اختبار (EMA20 Pullback)' : 'تقاطع زخم مع الاتجاه (RSI Crossover)';
       let telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Momentum + AI Gatekeeper):**\n- الأصل: ${symbol}\n- نوع الدخول: 🎯 ${entryTypeArabic}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- السعر: $${formatPrice(currentClose)}\n- 🏦 رصيد الحساب: $${currentLiveBal.toFixed(2)}\n- 📏 حجم الصفقة المقترح: ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: $${posSize.actualRiskUSD.toFixed(2)} / سقف $${getMaxTradeRiskUSD().toFixed(2)})\n- SL (1.5x ATR): $${formatPrice(sl)} | TP (${tpMultiplier.toFixed(1)}x ATR): $${formatPrice(tp)}\n- ATR (14): $${formatPrice(signalDetails.atr)}\n- RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
+
+      // 🔒 تعليمات تأمين الأرباح المسبقة لسرعة التنفيذ اللحظي
+      telegramMsg += `\n\n🔒 **تعليمات تأمين الأرباح المسبقة (${isGold ? '+1.50 نقطة كاش' : 'نقطة التعادل'}):**\n- 🎯 مستوى تفعيل التأمين (${Math.round(beRatio * 100)}% من مسار الهدف): **$${formatPrice(lockTriggerPrice)}**\n- 🛡️ عند وصول السعر إليه، انقل الوقف (SL) في المنصة فوراً إلى: **$${formatPrice(lockSlPrice)}** (لحجز +1.50$ ربح كاش مضمون)\n💡 *نصيحة للتنفيذ الفوري في MT5:* ضع تنبيه سعر (Price Alert) عند **$${formatPrice(lockTriggerPrice)}** لتحريك الوقف فوراً لحظة لمس السعر دون أي تأخير!`;
       if (posSize.hasRiskWarning) {
         telegramMsg += `\n\n${posSize.riskWarningMessage}`;
       }
