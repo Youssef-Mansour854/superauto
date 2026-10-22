@@ -330,3 +330,15 @@ export function calculatePnLUSD(
 ): number {
   return Number((pnlPoints * lotSize * contractSize).toFixed(2));
 }
+
+// ============================================================================
+// 🧠 6. محرك التعلّم الذاتي التكيّفي (AI Adaptive Learning Engine)
+// ============================================================================
+// مفتاح الأمان الرئيسي: تفعيل/تعطيل فلترة الصفقات بناءً على دروس الذكاء الاصطناعي
+// معطل افتراضياً (false) لأمان 100%، وعند تفعيله (true) يقوم الـ Gatekeeper بتطبيق القواعد المستفادة
+export const ENABLE_AI_LEARNING_ENGINE: boolean = process.env.ENABLE_AI_LEARNING_ENGINE === 'true';
+
+export function isAiLearningEnabled(): boolean {
+  return ENABLE_AI_LEARNING_ENGINE;
+}
+
