@@ -5,7 +5,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "learn": "node scripts/run_ai_learning.cjs"
+    "learn": "node scripts/run_ai_learning.cjs",
+    "simulate": "node scripts/simulate_gold_v2.cjs"
   },
   "dependencies": {
     "@types/node": "^26.2.0",
