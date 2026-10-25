@@ -181,6 +181,21 @@ export interface PositionSizeResult {
 }
 
 /**
+ * 📈 دالة حساب حجم لوت التراكم الذكي (Compounding Lot Sizing)
+ * تضاعف اللوت التلقائي مع كل تضاعف في رصيد الحساب:
+ * - رصيد 100$ إلى 199$: لوت 0.01
+ * - رصيد 200$ إلى 399$: لوت 0.02
+ * - رصيد 400$ إلى 799$: لوت 0.04
+ * - رصيد 800$ فأكثر: لوت 0.08
+ */
+export function getCompoundingLot(accountBalance: number = getLiveAccountBalance()): number {
+  if (accountBalance >= 800) return 0.08;
+  if (accountBalance >= 400) return 0.04;
+  if (accountBalance >= 200) return 0.02;
+  return 0.01;
+}
+
+/**
  * 2. دالة حساب حجم الصفقة التلقائي والمخاطرة الفعلية
  * تحسب حجم اللوت المطلوب بحيث لو الصفقة ضربت الوقف الأصلي
  * تكون الخسارة مساوية بالظبط لـ: accountBalance × (riskPercent / 100)
@@ -229,7 +244,12 @@ export function calculatePositionSize(
   const rawLot = targetRiskUSD / lossPerOneLot;
 
   // تقريب حجم اللوت لأقرب خطوة لوت (0.01) مع حده الأدنى 0.01
-  const roundedLot = Math.max(0.01, Math.round(rawLot * 100) / 100);
+  const baseRoundedLot = Math.max(0.01, Math.round(rawLot * 100) / 100);
+
+  // نظام مضاعفة اللوت التراكمي الذكي مع تضاعف رصيد الحساب
+  const isCompoundingEnabled = process.env.ENABLE_COMPOUNDING_LOT !== 'false';
+  const compoundingLot = getCompoundingLot(accountBalance);
+  const roundedLot = isCompoundingEnabled ? Math.max(compoundingLot, baseRoundedLot) : baseRoundedLot;
 
   // حساب المخاطرة الفعلية الحقيقية الناتجة عن التقريب للحد الأدنى:
   // actualRiskPercent = (slDistance × contractSize × finalLotSize) / accountBalance × 100
@@ -330,3 +350,15 @@ export function calculatePnLUSD(
 ): number {
   return Number((pnlPoints * lotSize * contractSize).toFixed(2));
 }
+
+// ============================================================================
+// 🧠 6. محرك التعلّم الذاتي التكيّفي (AI Adaptive Learning Engine)
+// ============================================================================
+// مفتاح الأمان الرئيسي: تفعيل/تعطيل فلترة الصفقات بناءً على دروس الذكاء الاصطناعي
+// معطل افتراضياً (false) لأمان 100%، وعند تفعيله (true) يقوم الـ Gatekeeper بتطبيق القواعد المستفادة
+export const ENABLE_AI_LEARNING_ENGINE: boolean = process.env.ENABLE_AI_LEARNING_ENGINE === 'true';
+
+export function isAiLearningEnabled(): boolean {
+  return ENABLE_AI_LEARNING_ENGINE;
+}
+

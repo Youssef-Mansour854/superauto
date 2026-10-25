@@ -8,6 +8,7 @@ import { fetchBinanceKlines, Candle } from '@/lib/binance';
 import { fetchTwelveData5mKlines, CandleFetchResult } from '@/lib/twelvedata';
 import { calculateScalpIndicators, formatPrice } from '@/lib/indicators';
 import { generateGroqArabicAlert, validateTradeConfluenceWithGroq } from '@/lib/groq';
+import { validateGoldSignalV2, evaluateDynamicTradeManagement } from '@/lib/goldStrategyV2';
 import { sendTelegramNotification } from '@/lib/telegram';
 import {
   calculatePositionSize,
@@ -519,110 +520,147 @@ async function runScalperEngine() {
               // Advanced Trade Management: Breakeven & Time Stop
               // -------------------------------------------------------------
 
-              // 1. Profit Lock & Breakeven Logic (Lock +1.50 points profit at >= 75% TP progress for Gold, standard BE for others)
-              if (!trade.breakevenApplied) {
-                const beRatio = matchingItem.symbol === 'XAU/USD' ? 0.75 : 0.6;
-                let isBeReached = false;
+              // 1. Gold Precision Scalper v2 Dynamic Profit Lock & Momentum Snatch
+              if (matchingItem.symbol === 'XAU/USD') {
+                const totalTargetPoints = Math.abs(trade.tp - trade.entryPrice);
+                const isBuy = trade.action === 'BUY';
+                const maxFloatingPoints = isBuy ? (candleHigh - trade.entryPrice) : (trade.entryPrice - candleLow);
+                const currentFloatingPoints = isBuy ? (currentPrice - trade.entryPrice) : (trade.entryPrice - currentPrice);
+                const progressRatio = totalTargetPoints > 0 ? (maxFloatingPoints / totalTargetPoints) : 0;
 
-                if (trade.action === 'BUY') {
-                  const targetBe = trade.entryPrice + beRatio * (trade.tp - trade.entryPrice);
-                  if (candleHigh >= targetBe) {
-                    isBeReached = true;
-                  }
-                } else if (trade.action === 'SELL') {
-                  const targetBe = trade.entryPrice - beRatio * (trade.entryPrice - trade.tp);
-                  if (candleLow <= targetBe) {
-                    isBeReached = true;
+                // أ. خروج فوري وخطف الربح عند ارتداد السعر بنسبة 25% من القمة بعد تحقيق تقدم محترم (>= 50% TP أو >= 1.2x ATR)
+                let momentumSnatchTriggered = false;
+                const atrBaseline = trade.atr || 4.0;
+                if ((progressRatio >= 0.50 || maxFloatingPoints >= atrBaseline * 1.2) && currentFloatingPoints > 0) {
+                  const retracement = maxFloatingPoints - currentFloatingPoints;
+                  if (retracement >= maxFloatingPoints * 0.25) {
+                    momentumSnatchTriggered = true;
                   }
                 }
 
-                if (isBeReached) {
-                  if (matchingItem.symbol === 'XAU/USD') {
-                    // Lock in +1.50 points profit for Gold
-                    const lockPoints = 1.50;
-                    trade.sl = trade.action === 'BUY'
-                      ? Number((trade.entryPrice + lockPoints).toFixed(2))
-                      : Number((trade.entryPrice - lockPoints).toFixed(2));
-                  } else {
-                    trade.sl = trade.entryPrice;
+                // ب. احتساب الوقف المتحرك المتدرج (Stepped Dynamic Lock)
+                let stepLockPoints = 0;
+                if (progressRatio >= 0.85) {
+                  stepLockPoints = Number((maxFloatingPoints * 0.70).toFixed(2));
+                } else if (progressRatio >= 0.70) {
+                  stepLockPoints = Number((maxFloatingPoints * 0.50).toFixed(2));
+                } else if (progressRatio >= 0.50) {
+                  stepLockPoints = Number((maxFloatingPoints * 0.30).toFixed(2));
+                } else if (progressRatio >= 0.35) {
+                  stepLockPoints = 0.50; // تأمين تكلفة السبريد (نقطة الدخول)
+                }
+
+                if (stepLockPoints > 0) {
+                  const candidateSl = isBuy
+                    ? Number((trade.entryPrice + stepLockPoints).toFixed(2))
+                    : Number((trade.entryPrice - stepLockPoints).toFixed(2));
+
+                  const isImprovement = isBuy ? candidateSl > trade.sl : candidateSl < trade.sl;
+                  if (isImprovement) {
+                    trade.sl = candidateSl;
+                    trade.breakevenApplied = true;
+                    await trade.save();
+
+                    const lockMsg = `🔒 **تأمين أرباح الذهب المتدرج (Gold Profit Lock)** 🎯\n- الأصل: ${trade.symbol}\n- تم رفع الوقف لحجز +${stepLockPoints} نقطة كاش (${(progressRatio * 100).toFixed(0)}% من مسار الهدف)!\n- الوقف الجديد: $${formatPrice(trade.sl)}`;
+                    logs.push(lockMsg);
+                    console.log(lockMsg);
+                    await sendTelegramNotification(lockMsg);
                   }
-                  trade.breakevenApplied = true;
+                }
+
+                // فحص ضرب الوقف المؤمن أو تفعيل خطف الربح
+                const lockedSlHit = isBuy
+                  ? (candleLow <= trade.sl || currentPrice <= trade.sl)
+                  : (candleHigh >= trade.sl || currentPrice >= trade.sl);
+
+                if (momentumSnatchTriggered || lockedSlHit) {
+                  const exitPrice = momentumSnatchTriggered ? currentPrice : trade.sl;
+                  const closedAt = new Date();
+                  const rawDiff = isBuy ? (exitPrice - trade.entryPrice) : (trade.entryPrice - exitPrice);
+                  const pnlPoints = Number(rawDiff.toFixed(2));
+                  const finalStatus: 'WIN' | 'BREAKEVEN' = pnlPoints > 0.05 ? 'WIN' : 'BREAKEVEN';
+                  const spec = getSymbolSpec(trade.symbol);
+                  const lotSize = trade.suggestedLotSize || calculatePositionSize(trade.entryPrice, trade.sl, currentLiveBal, undefined, spec.contractSize).lotSize;
+                  const pnlBreakdown = calculateDetailedPnL(pnlPoints, lotSize, trade.symbol, finalStatus === 'BREAKEVEN');
+                  const netPnLUSD = pnlBreakdown.netPnLUSD;
+                  const grossPnLUSD = pnlBreakdown.grossPnLUSD;
+                  const tradingFeeUSD = pnlBreakdown.tradingFeeUSD;
+
+                  const accountUpdate = await applyTradeResultToAccount(netPnLUSD, finalStatus, trade._id.toString());
+                  const updatedBal = accountUpdate.newBalance;
+                  currentLiveBal = updatedBal;
+
+                  await TradeHistory.create({
+                    tradeId: trade._id.toString(),
+                    symbol: trade.symbol,
+                    action: trade.action,
+                    tradeType: trade.tradeType,
+                    entryPrice: trade.entryPrice,
+                    exitPrice,
+                    sl: trade.sl,
+                    tp: trade.tp,
+                    status: finalStatus,
+                    suggestedLotSize: lotSize,
+                    pnlPoints,
+                    pnlUSD: netPnLUSD,
+                    grossPnLUSD,
+                    tradingFeeUSD,
+                    netPnLUSD,
+                    balanceAfterTrade: updatedBal,
+                    rsi: trade.rsi,
+                    ema20: trade.ema20,
+                    ema100: trade.ema100 || trade.ema200,
+                    atr: trade.atr,
+                    groqAnalysis: trade.groqAnalysis,
+                    entryTimestamp: trade.timestamp,
+                    closedAt
+                  });
+
+                  trade.status = 'ARCHIVED';
+                  trade.exitPrice = exitPrice;
+                  trade.suggestedLotSize = lotSize;
+                  trade.pnlPoints = pnlPoints;
+                  trade.pnlUSD = netPnLUSD;
+                  trade.grossPnLUSD = grossPnLUSD;
+                  trade.tradingFeeUSD = tradingFeeUSD;
+                  trade.netPnLUSD = netPnLUSD;
+                  trade.balanceAfterTrade = updatedBal;
+                  trade.closedAt = closedAt;
                   await trade.save();
 
-                  const lockMsg = matchingItem.symbol === 'XAU/USD'
-                    ? `🔒 **تأمين الأرباح (Profit Lock +1.5 pts)** 🎯\n- الأصل: ${trade.symbol}\n- تم حجز ربح +1.50 نقطة كاش بعد قطع 75% من مسار الهدف بنجاح!\n- الوقف الجديد: $${formatPrice(trade.sl)} (مضمون ربح حتى في حال ارتداد السعر)`
-                    : `🛡️ (BREAKEVEN) Risk Free! SL moved to Entry Price for ${trade.symbol}.`;
+                  const exitReasonText = momentumSnatchTriggered
+                    ? `⚡ خطف الربح فوراً بسعر السوق (+${pnlPoints} pts / $${netPnLUSD}) قبل تلاشي الأرباح!`
+                    : `🔒 خروج بتأمين الأرباح المتدرج (+${pnlPoints} pts / $${netPnLUSD})`;
+
+                  const pnlPrefix = netPnLUSD > 0 ? '+' : '';
+                  const feeText = tradingFeeUSD > 0 ? `\n📉 تكلفة التداول (سبريد وانزلاق): -$${tradingFeeUSD.toFixed(2)}` : '';
+                  const balanceText = `\n🏦 **رصيد الحساب الآن:** $${updatedBal.toFixed(2)} (${pnlPrefix}$${netPnLUSD.toFixed(2)})`;
+                  const telegramMsg = `🏆 **إغلاق وحجز أرباح الذهب بنجاح!** 💵\n- الأصل: ${trade.symbol}\n- السبب: ${exitReasonText}\n- سعر الخروج: $${formatPrice(exitPrice)}\n- صافي الربح: +$${netPnLUSD.toFixed(2)} (+${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}${balanceText}`;
+                  logs.push(telegramMsg);
+                  console.log(telegramMsg);
+                  await sendTelegramNotification(telegramMsg);
+                  continue;
+                }
+              } else if (!trade.breakevenApplied) {
+                // Standard BE for other symbols (QQQ, etc.)
+                const beRatio = 0.6;
+                let isBeReached = false;
+                if (trade.action === 'BUY') {
+                  const targetBe = trade.entryPrice + beRatio * (trade.tp - trade.entryPrice);
+                  if (candleHigh >= targetBe) isBeReached = true;
+                } else if (trade.action === 'SELL') {
+                  const targetBe = trade.entryPrice - beRatio * (trade.entryPrice - trade.tp);
+                  if (candleLow <= targetBe) isBeReached = true;
+                }
+
+                if (isBeReached) {
+                  trade.sl = trade.entryPrice;
+                  trade.breakevenApplied = true;
+                  await trade.save();
+                  const lockMsg = `🛡️ (BREAKEVEN) Risk Free! SL moved to Entry Price for ${trade.symbol}.`;
                   logs.push(lockMsg);
                   console.log(lockMsg);
                   await sendTelegramNotification(lockMsg);
-
-                  // فحص خروج فوري لحظي: إذا كان السعر قد ارتد بالفعل ولمس أو كسر الوقف المؤمن الجديد
-                  const lockedSlHit = trade.action === 'BUY'
-                    ? (candleLow <= trade.sl || currentPrice <= trade.sl)
-                    : (candleHigh >= trade.sl || currentPrice >= trade.sl);
-
-                  if (lockedSlHit) {
-                    const exitPrice = trade.sl;
-                    const closedAt = new Date();
-                    const rawDiff = trade.action === 'BUY' ? (exitPrice - trade.entryPrice) : (trade.entryPrice - exitPrice);
-                    const pnlPoints = Number(rawDiff.toFixed(2));
-                    const finalStatus: 'WIN' | 'BREAKEVEN' = pnlPoints > 0.05 ? 'WIN' : 'BREAKEVEN';
-                    const spec = getSymbolSpec(trade.symbol);
-                    const lotSize = trade.suggestedLotSize || calculatePositionSize(trade.entryPrice, trade.sl, currentLiveBal, undefined, spec.contractSize).lotSize;
-                    const pnlBreakdown = calculateDetailedPnL(pnlPoints, lotSize, trade.symbol, finalStatus === 'BREAKEVEN');
-                    const netPnLUSD = pnlBreakdown.netPnLUSD;
-                    const grossPnLUSD = pnlBreakdown.grossPnLUSD;
-                    const tradingFeeUSD = pnlBreakdown.tradingFeeUSD;
-
-                    const accountUpdate = await applyTradeResultToAccount(netPnLUSD, finalStatus, trade._id.toString());
-                    const updatedBal = accountUpdate.newBalance;
-                    currentLiveBal = updatedBal;
-
-                    await TradeHistory.create({
-                      tradeId: trade._id.toString(),
-                      symbol: trade.symbol,
-                      action: trade.action,
-                      tradeType: trade.tradeType,
-                      entryPrice: trade.entryPrice,
-                      exitPrice,
-                      sl: trade.sl,
-                      tp: trade.tp,
-                      status: finalStatus,
-                      suggestedLotSize: lotSize,
-                      pnlPoints,
-                      pnlUSD: netPnLUSD,
-                      grossPnLUSD,
-                      tradingFeeUSD,
-                      netPnLUSD,
-                      balanceAfterTrade: updatedBal,
-                      rsi: trade.rsi,
-                      ema20: trade.ema20,
-                      ema100: trade.ema100 || trade.ema200,
-                      atr: trade.atr,
-                      groqAnalysis: trade.groqAnalysis,
-                      entryTimestamp: trade.timestamp,
-                      closedAt
-                    });
-
-                    trade.status = 'ARCHIVED';
-                    trade.exitPrice = exitPrice;
-                    trade.suggestedLotSize = lotSize;
-                    trade.pnlPoints = pnlPoints;
-                    trade.pnlUSD = netPnLUSD;
-                    trade.grossPnLUSD = grossPnLUSD;
-                    trade.tradingFeeUSD = tradingFeeUSD;
-                    trade.netPnLUSD = netPnLUSD;
-                    trade.balanceAfterTrade = updatedBal;
-                    trade.closedAt = closedAt;
-                    await trade.save();
-
-                    const pnlPrefix = netPnLUSD > 0 ? '+' : '';
-                    const feeText = tradingFeeUSD > 0 ? `\n📉 تكلفة التداول (سبريد وانزلاق): -$${tradingFeeUSD.toFixed(2)}` : '';
-                    const balanceText = `\n🏦 **رصيد الحساب الآن:** $${updatedBal.toFixed(2)} (${pnlPrefix}$${netPnLUSD.toFixed(2)})`;
-                    const outcomeText = `🎯 **تأمين الربح المحجوز بنجاح! (PROFIT LOCKED WIN)** 🔒\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\n💰 النتيجة الصافية: +$${netPnLUSD.toFixed(2)} (+${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت${feeText}${balanceText}`;
-                    await sendTelegramNotification(outcomeText);
-                    logs.push(`Scalp trade ${trade._id} exited immediately on locked SL with ${finalStatus}`);
-                  }
                 }
               }
 
@@ -968,6 +1006,30 @@ async function runScalperEngine() {
         logs.push(skipCapMsg);
         console.warn(skipCapMsg);
         return { symbol, signalTriggered: false, skipped: true, reason: skipCapMsg };
+      }
+
+      // 🥇 فلاتر استراتيجية القناص الذهبي v2 (The 5 Golden Rules)
+      if (symbol === 'XAU/USD' || normSym === 'XAU/USD') {
+        const v2Validation = validateGoldSignalV2({
+          symbol: 'XAU/USD',
+          action: signalType,
+          entryPrice: currentClose,
+          sl,
+          tp,
+          rsi: currentRsi,
+          ema20: currentEma20,
+          ema200: currentEma100,
+          atr: currentAtr,
+          timestamp: new Date()
+        });
+
+        if (!v2Validation.approved) {
+          const skipMsg = `🥇 [XAU/USD] تم حظر الصفقة بواسطة فلاتر القناص v2 (${v2Validation.blockedBy}): ${v2Validation.reasons.join(' | ')}`;
+          logs.push(skipMsg);
+          console.warn(skipMsg);
+          return { symbol, signalTriggered: false, skipped: true, reason: skipMsg };
+        }
+        logs.push(`🥇 [XAU/USD] اجتازت الإشارة فلاتر القناص الذهبي v2 بنجاح (Score: ${v2Validation.score}/10)`);
       }
 
       // 🤖 Groq AI Gatekeeper: فحص جودة وتوافق الإشارة قبل التنفيذ (مع تدقيق إضافي يوم الاثنين)

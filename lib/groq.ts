@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { formatPrice } from './indicators';
+import { isAiLearningEnabled } from '@/config/accountConfig';
+import { getActiveNegativeRules } from './aiTradeLearner';
 
 export interface GroqSignalData {
   symbol: string;
@@ -26,7 +28,7 @@ export interface GroqSwingData {
   newsHeadlines: string[];
 }
 
-const DEFAULT_MODEL = process.env.GROQ_MODEL || 'llama3-8b-8192';
+const DEFAULT_MODEL = process.env.GROQ_MODEL || 'qwen/qwen3.8-27b';
 
 export async function generateGroqArabicAlert(data: GroqSignalData): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
@@ -205,6 +207,21 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
 
   const mondayInstruction = `\n⚠️ ملاحظة خاصة: كن فائق الصرامة والتدقيق لمخاطر التذبذب العرضي وضعف السيولة، ولا توافق إلا إذا كانت الإشارة مثالية بنسبة 100% (الموافقة تتطلب تقييم 7.5 أو أعلى دائماً).`;
 
+  // جلب القواعد السلبية المستفادة من الذكاء الاصطناعي لو المفتاح مفعل
+  let aiMemoryRulesSection = '';
+  if (isAiLearningEnabled()) {
+    try {
+      const activeRules = await getActiveNegativeRules();
+      if (activeRules && activeRules.length > 0) {
+        aiMemoryRulesSection = `\n📌 قواعد صارمة مستفادة من تحليل صفقات البوت السابقة لمنع تكرار الخسائر:\n` +
+          activeRules.map((r, i) => `${i + 1}. ${r}`).join('\n') +
+          `\n⚠️ إذا خالفت هذه الإشارة أي قاعدة من القواعد السابقة، ارفض الصفقة فوراً (Score < 7.5).\n`;
+      }
+    } catch (e) {
+      // تجاهل الخطأ بأمان تام والاستمرار
+    }
+  }
+
   const userPrompt = `
 قم بتقييم إشارة السكالبينج التالية لـ ${data.symbol}:
 - نوع الصفقة: ${data.action} (${data.triggerReason === 'PULLBACK' ? 'ارتداد EMA20' : 'تقاطع زخم RSI'})
@@ -212,7 +229,7 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
 - Stop Loss: $${formatPrice(data.sl)} | Take Profit: $${formatPrice(data.tp)}
 - RSI (14): ${formatPrice(data.rsi)}
 - EMA 20: $${formatPrice(data.ema20)} | EMA 100: $${formatPrice(data.ema100)}
-- ATR (14): $${formatPrice(data.atr)}${mondayInstruction}
+- ATR (14): $${formatPrice(data.atr)}${mondayInstruction}${aiMemoryRulesSection}
 
 شروط التقييم الصارم:
 - اعطِ درجة من 1 إلى 10 (الموافقة تتطلب تقييم صارم 7.5 أو أعلى).
