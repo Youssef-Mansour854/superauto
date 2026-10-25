@@ -36,10 +36,58 @@ export interface DynamicExitState {
   reason: string;
 }
 
+export type GoldStrategyMode = 'STRICT_4_PER_DAY' | 'ACTIVE_6_PER_DAY';
+
+export interface StrategyConfig {
+  mode: GoldStrategyMode;
+  maxEmaDistRatio: number;
+  maxAtr: number;
+  buyRsiMin: number;
+  buyRsiMax: number;
+  sellRsiMin: number;
+  sellRsiMax: number;
+  allowHour21: boolean;
+  allowThuHour18: boolean;
+}
+
+export const STRATEGY_PRESETS: Record<GoldStrategyMode, StrategyConfig> = {
+  // 1. الوضع الصارم (متوسط 4 صفقات يومياً)
+  STRICT_4_PER_DAY: {
+    mode: 'STRICT_4_PER_DAY',
+    maxEmaDistRatio: 0.65,
+    maxAtr: 6.5,
+    buyRsiMin: 48,
+    buyRsiMax: 62,
+    sellRsiMin: 36,
+    sellRsiMax: 55,
+    allowHour21: false,
+    allowThuHour18: false
+  },
+  // 2. الوضع النشط المتوازن (متوسط 6 صفقات يومياً بجودة عالية)
+  ACTIVE_6_PER_DAY: {
+    mode: 'ACTIVE_6_PER_DAY',
+    maxEmaDistRatio: 0.88,
+    maxAtr: 7.0,
+    buyRsiMin: 44,
+    buyRsiMax: 65,
+    sellRsiMin: 35,
+    sellRsiMax: 58,
+    allowHour21: true,      // الساعة 21:00 أثبتت تاريخياً نسبة فوز 57.1% وربح إيجابي
+    allowThuHour18: true   // الساعة 18:00 يوم الخميس أثبتت تاريخياً نسبة فوز 66.7%
+  }
+};
+
+// الإعداد الافتراضي الحالي (يمكن تغييره عبر المتغير البيئي GOLD_STRATEGY_MODE)
+export const CURRENT_GOLD_MODE: GoldStrategyMode =
+  (process.env.GOLD_STRATEGY_MODE as GoldStrategyMode) || 'ACTIVE_6_PER_DAY';
+
 // ----------------------------------------------------------------------------
 // 1. فحص التوقيت والأيام (Time & Session Gates - توقيت القاهرة)
 // ----------------------------------------------------------------------------
-export function checkGoldTimeGate(dateInput: Date | string = new Date()): { allowed: boolean; reason?: string } {
+export function checkGoldTimeGate(
+  dateInput: Date | string = new Date(),
+  config: StrategyConfig = STRATEGY_PRESETS[CURRENT_GOLD_MODE]
+): { allowed: boolean; reason?: string } {
   const d = new Date(dateInput);
   if (isNaN(d.getTime())) return { allowed: true };
 
@@ -57,10 +105,12 @@ export function checkGoldTimeGate(dateInput: Date | string = new Date()): { allo
     return { allowed: false, reason: 'السوق مغلق (عطلة نهاية الأسبوع)' };
   }
 
-  // 3. قاعدة الخميس الذكية: إيقاف التداول بعد 14:30 بتوقيت القاهرة
+  // 3. قاعدة الخميس الذكية: إيقاف التداول بعد 14:30 بتوقيت القاهرة مع استثناء نافذة 18:00 المربحة لو مفعلة
   if (dayIdx === 4) {
     if (cairoHour > 14 || (cairoHour === 14 && cairoMinute >= 30)) {
-      return { allowed: false, reason: 'حظر فترة بعد الظهر ليوم الخميس (بيانات البطالة وافتتاح نيويورك)' };
+      if (!(config.allowThuHour18 && cairoHour === 18)) {
+        return { allowed: false, reason: 'حظر فترة بعد الظهر ليوم الخميس (بيانات البطالة وافتتاح نيويورك)' };
+      }
     }
   }
 
@@ -70,9 +120,14 @@ export function checkGoldTimeGate(dateInput: Date | string = new Date()): { allo
     return { allowed: false, reason: 'الساعة السامة 09:00: افتتاح أوروبا والتذبذب المفاجئ' };
   }
 
-  // 20:00 - 21:59 (انسحاب سيولة نيويورك وتذبذب ختام الجلسة)
-  if (cairoHour === 20 || cairoHour === 21) {
-    return { allowed: false, reason: 'الساعة السامة 20:00 - 21:59: ضعف سيولة المساء الأمريكي' };
+  // 20:00 (انسحاب سيولة نيويورك)
+  if (cairoHour === 20) {
+    return { allowed: false, reason: 'الساعة السامة 20:00: ضعف سيولة المساء الأمريكي' };
+  }
+
+  // 21:00 (محظورة في الوضع الصارم، ومسموحة في وضع الـ 6 صفقات لأنها تاريخياً 57% فوز)
+  if (cairoHour === 21 && !config.allowHour21) {
+    return { allowed: false, reason: 'الساعة 21:00: محظورة في الوضع الصارم' };
   }
 
   return { allowed: true };
@@ -81,11 +136,14 @@ export function checkGoldTimeGate(dateInput: Date | string = new Date()): { allo
 // ----------------------------------------------------------------------------
 // 2. فلاتر الدخول الصارمة (The 5 Golden Pre-Trade Filters)
 // ----------------------------------------------------------------------------
-export function validateGoldSignalV2(input: GoldTradeSignalInput): GateValidationResult {
+export function validateGoldSignalV2(
+  input: GoldTradeSignalInput,
+  config: StrategyConfig = STRATEGY_PRESETS[CURRENT_GOLD_MODE]
+): GateValidationResult {
   const reasons: string[] = [];
 
   // أ. فحص التوقيت
-  const timeGate = checkGoldTimeGate(input.timestamp || new Date());
+  const timeGate = checkGoldTimeGate(input.timestamp || new Date(), config);
   if (!timeGate.allowed) {
     return {
       approved: false,
@@ -119,37 +177,37 @@ export function validateGoldSignalV2(input: GoldTradeSignalInput): GateValidatio
   if (typeof input.rsi === 'number') {
     // حظر الشراء تحت 40 (أثبتت خسارة 100%)
     if (input.action === 'BUY') {
-      if (input.rsi < 40) {
+      if (input.rsi < config.buyRsiMin) {
         return {
           approved: false,
           score: 2.0,
-          blockedBy: 'RSI_DEATH_ZONE',
-          reasons: [`رفض شراء قاطع: RSI = ${input.rsi.toFixed(1)} أقل من 40 (فخ السكاكين الهابطة)`]
+          blockedBy: 'RSI_TOO_LOW',
+          reasons: [`رفض شراء قاطع: RSI = ${input.rsi.toFixed(1)} أقل من ${config.buyRsiMin}`]
         };
       }
-      if (input.rsi > 62) {
+      if (input.rsi > config.buyRsiMax) {
         return {
           approved: false,
           score: 4.0,
           blockedBy: 'RSI_OVERBOUGHT',
-          reasons: [`رفض شراء: RSI = ${input.rsi.toFixed(1)} متضخم فوق 62 (شراء عند قمة)`]
+          reasons: [`رفض شراء: RSI = ${input.rsi.toFixed(1)} متضخم فوق ${config.buyRsiMax}`]
         };
       }
     } else if (input.action === 'SELL') {
-      if (input.rsi > 60) {
+      if (input.rsi > config.sellRsiMax) {
         return {
           approved: false,
           score: 2.0,
           blockedBy: 'RSI_OVERBOUGHT_SELL',
-          reasons: [`رفض بيع: RSI = ${input.rsi.toFixed(1)} مرتفع في اتجاه صاعد قوي`]
+          reasons: [`رفض بيع: RSI = ${input.rsi.toFixed(1)} مرتفع فوق ${config.sellRsiMax}`]
         };
       }
-      if (input.rsi < 36) {
+      if (input.rsi < config.sellRsiMin) {
         return {
           approved: false,
           score: 4.0,
           blockedBy: 'RSI_OVERSOLD',
-          reasons: [`رفض بيع: RSI = ${input.rsi.toFixed(1)} منخفض جداً تحت 36 (بيع في القاع)`]
+          reasons: [`رفض بيع: RSI = ${input.rsi.toFixed(1)} منخفض جداً تحت ${config.sellRsiMin}`]
         };
       }
     }
@@ -158,7 +216,7 @@ export function validateGoldSignalV2(input: GoldTradeSignalInput): GateValidatio
   // د. قفل ارتداد EMA20 (منع مطاردة الشموع الممتدة)
   if (typeof input.ema20 === 'number' && typeof input.atr === 'number' && input.atr > 0) {
     const distFromEma = Math.abs(input.entryPrice - input.ema20);
-    const maxAllowedDist = input.atr * 0.65; // بحد أقصى 0.65x ATR
+    const maxAllowedDist = input.atr * config.maxEmaDistRatio;
     if (distFromEma > maxAllowedDist) {
       return {
         approved: false,
@@ -170,16 +228,16 @@ export function validateGoldSignalV2(input: GoldTradeSignalInput): GateValidatio
   }
 
   // هـ. سقف التقلب المفرط (ATR Cap)
-  if (typeof input.atr === 'number' && input.atr > 6.5) {
+  if (typeof input.atr === 'number' && input.atr > config.maxAtr) {
     return {
       approved: false,
       score: 3.5,
       blockedBy: 'ATR_TOO_HIGH',
-      reasons: [`رفض تقلب عالي: ATR = ${input.atr.toFixed(2)} أكبر من 6.5 (انزلاقات سعرية خطرة)`]
+      reasons: [`رفض تقلب عالي: ATR = ${input.atr.toFixed(2)} أكبر من ${config.maxAtr} (انزلاقات سعرية خطرة)`]
     };
   }
 
-  reasons.push('✅ متوافق مع كافة شروط القناص الذهبي v2 (ترند، توقيت، ارتداد، وزخم)');
+  reasons.push(`✅ متوافق مع كافة شروط القناص الذهبي v2 (وضع: ${config.mode})`);
   return {
     approved: true,
     score: 9.0,
