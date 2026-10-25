@@ -77,9 +77,9 @@ export const STRATEGY_PRESETS: Record<GoldStrategyMode, StrategyConfig> = {
   }
 };
 
-// الإعداد الافتراضي الحالي (يمكن تغييره عبر المتغير البيئي GOLD_STRATEGY_MODE)
+// الإعداد الافتراضي الحالي (تم ضبطه على الوضع الصارم STRICT_4_PER_DAY بناءً على طلبك)
 export const CURRENT_GOLD_MODE: GoldStrategyMode =
-  (process.env.GOLD_STRATEGY_MODE as GoldStrategyMode) || 'ACTIVE_6_PER_DAY';
+  (process.env.GOLD_STRATEGY_MODE as GoldStrategyMode) || 'STRICT_4_PER_DAY';
 
 // ----------------------------------------------------------------------------
 // 1. فحص التوقيت والأيام (Time & Session Gates - توقيت القاهرة)
