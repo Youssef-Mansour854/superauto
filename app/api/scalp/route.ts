@@ -5,7 +5,7 @@ import TradeHistory from '@/models/TradeHistory';
 import { fetchBinanceKlines, Candle } from '@/lib/binance';
 import { fetchTwelveData5mKlines } from '@/lib/twelvedata';
 import { calculateScalpIndicators, formatPrice } from '@/lib/indicators';
-import { generateGroqArabicAlert } from '@/lib/groq';
+import { generateGroqArabicAlert, validateTradeConfluenceWithGroq } from '@/lib/groq';
 import { sendTelegramNotification } from '@/lib/telegram';
 import {
   calculatePositionSize,
@@ -545,6 +545,31 @@ async function runScalperEngine() {
         atr: currentAtr
       };
 
+      // 🤖 Groq AI Evaluation & Gatekeeper: تقييم وفحص جودة الإشارة بواسطة الذكاء الاصطناعي
+      const isMondayToday = new Date().getUTCDay() === 1;
+      const groqValidation = await validateTradeConfluenceWithGroq({
+        symbol,
+        action: signalType,
+        triggerReason: 'CROSSOVER',
+        entryPrice: currentClose,
+        sl,
+        tp,
+        rsi: currentRsi,
+        ema20: currentEma20,
+        ema100: currentEma100,
+        atr: currentAtr,
+        isMonday: isMondayToday
+      });
+
+      if (!groqValidation.approved) {
+        const rejectMsg = `🤖 [${symbol}] رفضت Groq AI الصفقة (تقييم: ${groqValidation.score}/10) | السبب: ${groqValidation.reason}`;
+        logs.push(rejectMsg);
+        console.log(rejectMsg);
+        return { symbol, signalTriggered: false, skipped: true, reason: rejectMsg, groqValidation };
+      }
+
+      logs.push(`✅ [${symbol}] وافقت Groq AI على الصفقة (تقييم: ${groqValidation.score}/10) | السبب: ${groqValidation.reason}`);
+
       // Generate Egyptian Arabic AI Alert via Groq
       const groqAnalysis = await generateGroqArabicAlert(signalDetails);
 
@@ -570,10 +595,10 @@ async function runScalperEngine() {
         : currentClose - 0.5 * (currentClose - tp);
 
       // Send Telegram Alert
-      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum - استراتيجية 9 سبتمبر):**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- سعر الدخول: $${formatPrice(currentClose)}\n- حجم اللوت المقترح: ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: $${posSize.actualRiskUSD.toFixed(2)})\n- وقف الخسارة SL (1.5x ATR): $${formatPrice(sl)}\n- الهدف TP (2.0x ATR): $${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): **$${formatPrice(beTargetPrice)}**\n- مؤشر ATR (14): $${formatPrice(signalDetails.atr)}\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
+      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum - استراتيجية 9 سبتمبر):**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- سعر الدخول: $${formatPrice(currentClose)}\n- حجم اللوت المقترح: ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: $${posSize.actualRiskUSD.toFixed(2)})\n- وقف الخسارة SL (1.5x ATR): $${formatPrice(sl)}\n- الهدف TP (2.0x ATR): $${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): **$${formatPrice(beTargetPrice)}**\n- مؤشر ATR (14): $${formatPrice(signalDetails.atr)}\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
       await sendTelegramNotification(telegramMsg);
 
-      return { symbol, signalTriggered: true, signal: signalDetails, groqAnalysis };
+      return { symbol, signalTriggered: true, signal: signalDetails, groqAnalysis, groqValidation };
 
     } catch (assetErr: any) {
       const errMsg = `Error processing scalp asset ${symbol}: ${assetErr?.message || assetErr}`;
