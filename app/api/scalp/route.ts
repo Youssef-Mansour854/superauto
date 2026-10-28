@@ -29,7 +29,7 @@ export interface ScalpWatchlistItem {
 
 // Watchlist symbols for 5-minute High-Frequency Scalper Engine (September 9 Strategy)
 export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
-  { symbol: 'XAU/USD', source: 'TWELVEDATA', enabled: true },
+  { symbol: 'XAU/USD', source: 'YAHOO', enabled: true },
   {
     symbol: 'EUR/USD',
     source: 'TWELVEDATA',
@@ -52,7 +52,7 @@ export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
 
 function normalizeSymbol(symbol: string): { symbol: string; source: string } {
   if (symbol === 'XAUUSD=X' || symbol === 'XAUUSD' || symbol === 'XAU/USD') {
-    return { symbol: 'XAU/USD', source: 'TWELVEDATA' };
+    return { symbol: 'XAU/USD', source: 'YAHOO' };
   }
   if (symbol === 'EURUSD=X' || symbol === 'EURUSD' || symbol === 'EUR/USD') {
     return { symbol: 'EUR/USD', source: 'TWELVEDATA' };
@@ -130,12 +130,19 @@ async function fetchAsset5mCandles(symbol: string, source: string): Promise<Cand
   if (source === 'BINANCE') {
     return await fetchBinanceKlines(symbol, '5m', 250);
   }
+  // Fast path for Gold: Yahoo Finance provides free real-time ticks in 300ms
+  if (source === 'YAHOO' || symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F') {
+    const yahooCandles = await fetchYahoo5mKlines(symbol);
+    if (yahooCandles && yahooCandles.length > 0) {
+      return yahooCandles;
+    }
+  }
   const result = await fetchTwelveData5mKlines(symbol, '5min', 250);
   if (result?.candles && result.candles.length > 0) {
     return result.candles;
   }
-  // High-reliability Fallback: Yahoo Finance if Twelve Data is empty or rate-limited
-  if (symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'QQQ' || symbol.includes('IXIC')) {
+  // Secondary fallback for other assets
+  if (symbol === 'QQQ' || symbol.includes('IXIC')) {
     const yahooCandles = await fetchYahoo5mKlines(symbol);
     if (yahooCandles && yahooCandles.length > 0) {
       return yahooCandles;
@@ -692,27 +699,27 @@ async function runScalperEngine() {
         atr: currentAtr
       };
 
-      // 🤖 Groq AI Advisory Evaluation: تقييم استشاري ذكي من Groq مع إرسال الصفقة دائماً
+      // 🤖 Groq AI Parallel Processing: تقييم الذكاء وتوليد التنبيه في نفس اللحظة بالتوازي لتقليل التأخير إلى أقصى حد
       const isMondayToday = new Date().getUTCDay() === 1;
-      const groqValidation = await validateTradeConfluenceWithGroq({
-        symbol,
-        action: signalType,
-        triggerReason: triggerReason || 'CROSSOVER',
-        entryPrice: currentClose,
-        sl,
-        tp,
-        rsi: currentRsi,
-        ema20: currentEma20,
-        ema100: currentEma100,
-        ema200: currentEma200,
-        atr: currentAtr,
-        isMonday: isMondayToday
-      });
+      const [groqValidation, groqAnalysis] = await Promise.all([
+        validateTradeConfluenceWithGroq({
+          symbol,
+          action: signalType,
+          triggerReason: triggerReason || 'CROSSOVER',
+          entryPrice: currentClose,
+          sl,
+          tp,
+          rsi: currentRsi,
+          ema20: currentEma20,
+          ema100: currentEma100,
+          ema200: currentEma200,
+          atr: currentAtr,
+          isMonday: isMondayToday
+        }),
+        generateGroqArabicAlert(signalDetails)
+      ]);
 
       logs.push(`🤖 [${symbol}] تقييم Groq AI للصفقة: ${groqValidation.score}/10 | السبب: ${groqValidation.reason}`);
-
-      // Generate Egyptian Arabic AI Alert via Groq
-      const groqAnalysis = await generateGroqArabicAlert(signalDetails);
 
       // Save to MongoDB with tradeType: 'SCALP'
       if (dbConnected) {
