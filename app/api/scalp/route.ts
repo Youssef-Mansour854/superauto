@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import axios from 'axios';
 import { connectToDatabase } from '@/lib/mongodb';
 import Trade from '@/models/Trade';
 import TradeHistory from '@/models/TradeHistory';
@@ -126,36 +127,71 @@ function isForexPair(symbol: string): boolean {
   return true;
 }
 
-async function fetchAsset5mCandles(symbol: string, source: string): Promise<Candle[]> {
+async function fetchKraken5mKlines(): Promise<Candle[]> {
+  try {
+    const res = await axios.get('https://api.kraken.com/0/public/OHLC?pair=PAXGUSD&interval=5', { timeout: 6000 });
+    const pairKey = Object.keys(res.data?.result || {}).find(k => k !== 'last');
+    if (!pairKey) return [];
+    const rawCandles = res.data.result[pairKey];
+    if (!Array.isArray(rawCandles) || rawCandles.length < 50) return [];
+    return rawCandles.slice(-250).map((c: any[]) => ({
+      openTime: c[0] * 1000,
+      open: parseFloat(c[1]),
+      high: parseFloat(c[2]),
+      low: parseFloat(c[3]),
+      close: parseFloat(c[4]),
+      volume: parseFloat(c[6]),
+      closeTime: (c[0] * 1000) + 300000
+    }));
+  } catch (err: any) {
+    console.warn('[Data Feed] Kraken fetch failed:', err?.message || err);
+    return [];
+  }
+}
+
+interface CandleFetchResponse {
+  candles: Candle[];
+  feedSource: string;
+}
+
+async function fetchAsset5mCandles(symbol: string, source: string): Promise<CandleFetchResponse> {
   const isGold = symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'PAXGUSDT';
 
-  // 1. Ultra-Fast Zero-Delay Real-time Spot Feed for Gold via Binance (PAXGUSDT tracks spot gold 1:1 down to the cent with 0 seconds latency)
+  // 1. Ultra-Fast US-Accessible Zero-Delay Feed for Gold (Kraken PAXG/USD - no geo-block on Vercel AWS, 300ms latency)
+  if (isGold) {
+    const krakenCandles = await fetchKraken5mKlines();
+    if (krakenCandles && krakenCandles.length >= 100) {
+      return { candles: krakenCandles, feedSource: 'KRAKEN (Real-Time Spot Gold)' };
+    }
+  }
+
+  // 2. High-speed Binance Feed
   if (source === 'BINANCE' || isGold) {
     try {
       const binanceSymbol = isGold ? 'PAXGUSDT' : symbol;
       const binanceCandles = await fetchBinanceKlines(binanceSymbol, '5m', 250);
       if (binanceCandles && binanceCandles.length >= 100) {
-        return binanceCandles;
+        return { candles: binanceCandles, feedSource: 'BINANCE (PAXGUSDT)' };
       }
     } catch (binanceErr: any) {
-      console.warn(`[Data Feed] Binance fetch failed for ${symbol}: ${binanceErr?.message || binanceErr}, trying fallbacks...`);
+      console.warn(`[Data Feed] Binance fetch failed for ${symbol}: ${binanceErr?.message || binanceErr}`);
     }
   }
 
-  // 2. High-reliability Fallback: Yahoo Finance
-  if (source === 'YAHOO' || isGold) {
+  // 3. Fallback: Yahoo Finance
+  if (source === 'YAHOO' || isGold || symbol === 'QQQ') {
     const yahooCandles = await fetchYahoo5mKlines(symbol);
     if (yahooCandles && yahooCandles.length > 0) {
-      return yahooCandles;
+      return { candles: yahooCandles, feedSource: 'YAHOO_FINANCE' };
     }
   }
 
-  // 3. Fallback: Twelve Data
+  // 4. Fallback: Twelve Data
   const result = await fetchTwelveData5mKlines(symbol, '5min', 250);
   if (result?.candles && result.candles.length > 0) {
-    return result.candles;
+    return { candles: result.candles, feedSource: 'TWELVEDATA' };
   }
-  return [];
+  return { candles: [], feedSource: 'NONE' };
 }
 
 async function runScalperEngine() {
@@ -197,9 +233,10 @@ async function runScalperEngine() {
             logs.push(`[${matchingItem.symbol}] Market closed (weekend), skipping pending evaluation.`);
             continue;
           }
-          const candles = await fetchAsset5mCandles(matchingItem.symbol, matchingItem.source);
+          const fetchRes = await fetchAsset5mCandles(matchingItem.symbol, matchingItem.source);
+          const candles = fetchRes.candles;
           if (!candles || candles.length === 0) {
-            logs.push(`[Pending Evaluation] Could not fetch candles for ${trade.symbol}. Will retry next cycle.`);
+            logs.push(`[Pending Evaluation] Could not fetch candles for ${trade.symbol} (${fetchRes.feedSource}). Will retry next cycle.`);
             continue;
           }
 
@@ -407,19 +444,32 @@ async function runScalperEngine() {
                   }
                 }
 
-                // فحص ضرب الوقف المؤمن أو تفعيل خطف الربح بسعر السوق
-                const lockedSlHit = isBuy
-                  ? (candleLow <= trade.sl || currentPrice <= trade.sl)
-                  : (candleHigh >= trade.sl || currentPrice >= trade.sl);
+                // فحص ضرب الوقف المؤمن (فقط بعد تأمين الصفقة ورفع الستوب لحجز الأرباح لمنع الخروج المبكر بعد دقيقة واحدة):
+                const lockedSlHit = trade.breakevenApplied && (
+                  isBuy
+                    ? (candleLow <= trade.sl || currentPrice <= trade.sl)
+                    : (candleHigh >= trade.sl || currentPrice >= trade.sl)
+                );
 
                 if (momentumSnatchTriggered || lockedSlHit) {
                   const exitPrice = momentumSnatchTriggered ? currentPrice : trade.sl;
                   const closedAt = new Date();
                   const rawDiff = isBuy ? (exitPrice - trade.entryPrice) : (trade.entryPrice - exitPrice);
                   const pnlPoints = Number(rawDiff.toFixed(2));
-                  const finalStatus: 'WIN' | 'BREAKEVEN' = pnlPoints > 0.05 ? 'WIN' : 'BREAKEVEN';
+
+                  // حساب النتيجة الدقيقة بدون أخطاء حسابية:
+                  let finalStatus: 'WIN' | 'BREAKEVEN' | 'LOSS' = 'LOSS';
+                  if (pnlPoints > 0.10) {
+                    finalStatus = 'WIN';
+                  } else if (pnlPoints >= -0.10) {
+                    finalStatus = 'BREAKEVEN';
+                  } else {
+                    finalStatus = 'LOSS';
+                  }
+
                   const lotSize = trade.suggestedLotSize || 0.01;
-                  const detailed = calculateDetailedPnL(pnlPoints, lotSize, trade.symbol, finalStatus === 'BREAKEVEN');
+                  const isBe = finalStatus === 'BREAKEVEN';
+                  const detailed = calculateDetailedPnL(pnlPoints, lotSize, trade.symbol, isBe);
 
                   const accountUpdate = await applyTradeResultToAccount(detailed.netPnLUSD, finalStatus, trade._id.toString());
                   currentLiveBal = accountUpdate.newBalance;
@@ -457,11 +507,18 @@ async function runScalperEngine() {
                   trade.balanceAfterTrade = accountUpdate.newBalance;
                   await trade.save();
 
-                  const exitReasonText = momentumSnatchTriggered
-                    ? `⚡ خطف الربح فوراً بسعر السوق (+${pnlPoints} نقطة / +${detailed.netPnLUSD.toFixed(2)}) قبل ارتداد السعر!`
-                    : `🔒 إغلاق بتأمين الأرباح المتدرج (+${pnlPoints} نقطة / +${detailed.netPnLUSD.toFixed(2)})`;
+                  let outcomeMsg = '';
+                  if (finalStatus === 'WIN') {
+                    const exitReasonText = momentumSnatchTriggered
+                      ? `⚡ خطف الربح فوراً بسعر السوق (+${pnlPoints} نقطة / +${detailed.netPnLUSD.toFixed(2)} دولار)`
+                      : `🔒 إغلاق بتأمين الأرباح المتدرج (+${pnlPoints} نقطة / +${detailed.netPnLUSD.toFixed(2)} دولار)`;
+                    outcomeMsg = `🏆 إغلاق وحجز أرباح الذهب بنجاح! 💵\n- الأصل: ${trade.symbol}\n- السبب: ${exitReasonText}\n- سعر الخروج: ${formatPrice(exitPrice)}\n- صافي الربح: +${detailed.netPnLUSD.toFixed(2)} دولار (+${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت\n- رصيد الحساب الآن: ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                  } else if (finalStatus === 'BREAKEVEN') {
+                    outcomeMsg = `🛡️ إغلاق صفقة الذهب على نقطة التعادل (Breakeven) ⚖️\n- الأصل: ${trade.symbol}\n- سعر الخروج: ${formatPrice(exitPrice)}\n- النتيجة: حماية رأس المال (${detailed.netPnLUSD.toFixed(2)} دولار رسوم)\n- رصيد الحساب الآن: ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                  } else {
+                    outcomeMsg = `🛑 إغلاق صفقة الذهب على وقف الخسارة 📉\n- الأصل: ${trade.symbol}\n- سعر الخروج: ${formatPrice(exitPrice)}\n- الخسارة: ${pnlPoints.toFixed(2)} نقطة (${detailed.netPnLUSD.toFixed(2)} دولار) | الحجم: ${lotSize.toFixed(2)} لوت\n- رصيد الحساب الآن: ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                  }
 
-                  const outcomeMsg = `🏆 إغلاق وحجز أرباح الذهب بنجاح! 💵\n- الأصل: ${trade.symbol}\n- السبب: ${exitReasonText}\n- سعر الخروج: ${formatPrice(exitPrice)}\n- صافي الربح: +${detailed.netPnLUSD.toFixed(2)} (+${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت\n- رصيد الحساب الآن: ${accountUpdate.newBalance.toFixed(2)}`;
                   logs.push(outcomeMsg);
                   console.log(outcomeMsg);
                   await sendTelegramNotification(outcomeMsg);
@@ -613,10 +670,11 @@ async function runScalperEngine() {
       }
 
       logs.push(`Processing 5m candles for ${symbol} via ${source}...`);
-      const candles = await fetchAsset5mCandles(symbol, source);
+      const fetchRes = await fetchAsset5mCandles(symbol, source);
+      const candles = fetchRes.candles;
 
       if (!candles || candles.length < 100) {
-        const msg = `Insufficient candle data for ${symbol} (minimum 100 required for EMA100). Skipping.`;
+        const msg = `Insufficient candle data for ${symbol} (${fetchRes.feedSource}). Skipping.`;
         logs.push(msg);
         return { symbol, signalTriggered: false, skipped: true, reason: msg };
       }
@@ -630,7 +688,7 @@ async function runScalperEngine() {
 
       const { currentClose, currentLow, currentHigh, currentEma20, currentEma100, currentEma200, currentRsi, prevRsi, currentAtr } = ind;
       const latestCandleTime = new Date(candles[candles.length - 1].openTime).toLocaleTimeString('en-US', { timeZone: 'Africa/Cairo' });
-      logs.push(`[Data Feed Confirmed: BINANCE] Fetched ${candles.length} candles for ${symbol}. Latest price: ${currentClose} (Candle Cairo time: ${latestCandleTime})`);
+      logs.push(`[Data Feed Confirmed: ${fetchRes.feedSource}] Fetched ${candles.length} candles for ${symbol}. Latest price: ${currentClose} (Candle Cairo time: ${latestCandleTime})`);
 
       // توافق الصورة الكبيرة والاتجاه العام (Macro Trend Confluence via EMA200 & EMA100):
       // EMA200 على فريم الـ 5 دقائق = 16.6 ساعة حركة سعر (الاتجاه الكلي لليوم).
