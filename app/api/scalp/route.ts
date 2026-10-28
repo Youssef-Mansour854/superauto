@@ -559,13 +559,13 @@ async function runScalperEngine() {
   if (!is5mCandleBoundary) {
     const idleMsg = `[Intra-5m Safe Gate] Minute :${currentMinute.toString().padStart(2, '0')} is an intra-bar monitoring cycle. New entry scan is scheduled for 5m candle close boundaries (:00, :05, :10...). Skipping new scan.`;
     logs.push(idleMsg);
-    return NextResponse.json({
+    return {
       success: true,
       engine: '5m High-Frequency Scalper (Adaptive 1m Monitor / 5m Entry)',
       mode: 'INTRA_5M_MONITOR_IDLE',
       currentMinute,
       logs
-    });
+    };
   }
 
   // 3. Filter active assets and iterate concurrently (Promise.allSettled)
