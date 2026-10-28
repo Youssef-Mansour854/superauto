@@ -249,46 +249,68 @@ async function runScalperEngine() {
             let newStatus: 'WIN' | 'LOSS' | 'BREAKEVEN' | null = null;
             let exitPrice = currentPrice;
 
-            // HYBRID SAFETY NET LOGIC (September 9 Baseline):
-            // 1. Hard Catastrophic Stop (Wick on High/Low): 3.0x ATR for Gold, 2.5x ATR for QQQ
-            // 2. Take Profit (Wick on High/Low): limit fill
-            // 3. Soft Stop (1.5x ATR): triggers ONLY on candle CLOSE
+            // HYBRID SAFETY NET LOGIC (Baseline Strategy):
+            // 1. Take Profit (Wick on High/Low): target reached (2.0x ATR)
+            // 2. Breakeven Stop: if breakeven applied, triggers at trade.sl (+0.50pt profit buffer)
+            // 3. Soft Stop (1.5x ATR): triggers ONLY on candle CLOSE before breakeven
+            // 4. Hard Catastrophic Stop (3.0x ATR): triggers on candle wick to protect against flash crashes
             const isQQQ = matchingItem.symbol.includes('QQQ') || matchingItem.symbol.includes('IXIC');
             const hardSlMult = isQQQ ? 2.5 : 3.0;
             const atrVal = trade.atr || (Math.abs(trade.sl - trade.entryPrice) / 1.5);
-            const hardSl = trade.breakevenApplied
-              ? trade.entryPrice
-              : (trade.action === 'BUY' ? trade.entryPrice - (atrVal * hardSlMult) : trade.entryPrice + (atrVal * hardSlMult));
 
             if (trade.action === 'BUY') {
-              const hardSlHit = candleLow <= hardSl;
               const tpHit = candleHigh >= trade.tp;
-              const softSlHit = currentPrice <= trade.sl; // Soft stop on candle CLOSE
 
-              if (hardSlHit) {
-                newStatus = 'LOSS';
-                exitPrice = hardSl;
-              } else if (tpHit) {
+              if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
-              } else if (softSlHit) {
-                newStatus = trade.breakevenApplied && Math.abs(trade.sl - trade.entryPrice) < 0.0001 ? 'BREAKEVEN' : 'LOSS';
-                exitPrice = trade.sl;
+              } else if (trade.breakevenApplied) {
+                // إذا تم تأمين الصفقة بربح بسيط: يخرج عند لمس الوقف المؤمن trade.sl
+                const beSlHit = candleLow <= trade.sl || currentPrice <= trade.sl;
+                if (beSlHit) {
+                  newStatus = 'BREAKEVEN';
+                  exitPrice = trade.sl;
+                }
+              } else {
+                // صفقة عادية قبل التأمين:
+                const hardSl = trade.entryPrice - (atrVal * hardSlMult);
+                const hardSlHit = candleLow <= hardSl;
+                const softSlHit = currentPrice <= trade.sl; // إغلاق شمعة الـ 5 دقائق تحت الوقف
+
+                if (hardSlHit) {
+                  newStatus = 'LOSS';
+                  exitPrice = hardSl;
+                } else if (softSlHit) {
+                  newStatus = 'LOSS';
+                  exitPrice = trade.sl;
+                }
               }
             } else if (trade.action === 'SELL') {
-              const hardSlHit = candleHigh >= hardSl;
               const tpHit = candleLow <= trade.tp;
-              const softSlHit = currentPrice >= trade.sl; // Soft stop on candle CLOSE
 
-              if (hardSlHit) {
-                newStatus = 'LOSS';
-                exitPrice = hardSl;
-              } else if (tpHit) {
+              if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
-              } else if (softSlHit) {
-                newStatus = trade.breakevenApplied && Math.abs(trade.sl - trade.entryPrice) < 0.0001 ? 'BREAKEVEN' : 'LOSS';
-                exitPrice = trade.sl;
+              } else if (trade.breakevenApplied) {
+                // إذا تم تأمين الصفقة بربح بسيط: يخرج عند لمس الوقف المؤمن trade.sl
+                const beSlHit = candleHigh >= trade.sl || currentPrice >= trade.sl;
+                if (beSlHit) {
+                  newStatus = 'BREAKEVEN';
+                  exitPrice = trade.sl;
+                }
+              } else {
+                // صفقة عادية قبل التأمين:
+                const hardSl = trade.entryPrice + (atrVal * hardSlMult);
+                const hardSlHit = candleHigh >= hardSl;
+                const softSlHit = currentPrice >= trade.sl; // إغلاق شمعة الـ 5 دقائق فوق الوقف
+
+                if (hardSlHit) {
+                  newStatus = 'LOSS';
+                  exitPrice = hardSl;
+                } else if (softSlHit) {
+                  newStatus = 'LOSS';
+                  exitPrice = trade.sl;
+                }
               }
             }
 
@@ -342,7 +364,7 @@ async function runScalperEngine() {
                 closedAt
               });
 
-              // Update active trade status to ARCHIVED so it's removed from pending list
+              // Update active trade status to ARCHIVED so it is removed from pending list
               trade.status = 'ARCHIVED';
               trade.exitPrice = exitPrice;
               trade.closedAt = closedAt;
@@ -351,15 +373,16 @@ async function runScalperEngine() {
               trade.balanceAfterTrade = accountUpdate.newBalance;
               await trade.save();
 
-              logs.push(`Scalp trade ${trade._id} (${trade.symbol}) archived with result ${newStatus} (Net: $${detailed.netPnLUSD.toFixed(2)})`);
+              logs.push(`Scalp trade ${trade._id} (${trade.symbol}) archived with result ${newStatus} (Net: ${detailed.netPnLUSD.toFixed(2)} USD)`);
 
               let outcomeText = '';
               if (newStatus === 'WIN') {
-                outcomeText = `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\nالربح المحقق: +${pnlPoints.toFixed(2)} نقطة (+$${detailed.netPnLUSD.toFixed(2)})\nرصيد الحساب الجديد: $${accountUpdate.newBalance.toFixed(2)}`;
+                outcomeText = `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: ${formatPrice(exitPrice)}\nالربح المحقق: +${pnlPoints.toFixed(2)} نقطة (+${detailed.netPnLUSD.toFixed(2)} دولار)\nرصيد الحساب الجديد: ${accountUpdate.newBalance.toFixed(2)} دولار`;
               } else if (newStatus === 'BREAKEVEN') {
-                outcomeText = `🛡 **إغلاق على نقطة الدخول (BREAKEVEN)!** ⚖️\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\nالنتيجة: بدون خسارة ($${detailed.netPnLUSD.toFixed(2)})\nرصيد الحساب: $${accountUpdate.newBalance.toFixed(2)}`;
+                const pnlSign = detailed.netPnLUSD >= 0 ? '+' : '';
+                outcomeText = `🛡 **إغلاق على تأمين الدخول بربح بسيط (BREAKEVEN)!** ⚖️\nالرمز: ${trade.symbol}\nسعر الخروج: ${formatPrice(exitPrice)}\nالنتيجة: ربح بسيط +${pnlPoints.toFixed(2)} نقطة (${pnlSign}${detailed.netPnLUSD.toFixed(2)} دولار صافي بعد السبريد)\nرصيد الحساب: ${accountUpdate.newBalance.toFixed(2)} دولار`;
               } else {
-                outcomeText = `📉 **ضرب وقف الخسارة! (LOSS)** 🛡\nالرمز: ${trade.symbol}\nسعر الخروج: $${formatPrice(exitPrice)}\nالخسارة: ${pnlPoints.toFixed(2)} نقطة ($${detailed.netPnLUSD.toFixed(2)})\nرصيد الحساب: $${accountUpdate.newBalance.toFixed(2)}`;
+                outcomeText = `📉 **ضرب وقف الخسارة! (LOSS)** 🛡\nالرمز: ${trade.symbol}\nسعر الخروج: ${formatPrice(exitPrice)}\nالخسارة: ${pnlPoints.toFixed(2)} نقطة (${detailed.netPnLUSD.toFixed(2)} دولار)\nرصيد الحساب: ${accountUpdate.newBalance.toFixed(2)} دولار`;
               }
               await sendTelegramNotification(outcomeText);
 
@@ -390,156 +413,36 @@ async function runScalperEngine() {
               }
             } else {
               // -------------------------------------------------------------
-              // Advanced Trade Management: Breakeven & Time Stop (September 9 Setup)
+              // Trade Management: Enhanced Breakeven & Smart Time Stop (Baseline Strategy)
               // -------------------------------------------------------------
 
-              // 1. Gold Dynamic Stepped Profit Lock & Momentum Snatch
-              if (matchingItem.symbol === 'XAU/USD') {
-                const totalTargetPoints = Math.abs(trade.tp - trade.entryPrice);
+              // 1. Enhanced Breakeven Activation:
+              // عند وصول السعر إلى 50% من المسار نحو الهدف ➔ نقل الوقف لحجز ربح بسيط وتغطية السبريد (+0.50 نقطة للذهب)
+              // بدون خروج مبكر أو متسرع، مع إتاحة المجال الكامل للصفقة للوصول للهدف الكامل!
+              if (!trade.breakevenApplied) {
                 const isBuy = trade.action === 'BUY';
-                const maxFloatingPoints = isBuy ? (candleHigh - trade.entryPrice) : (trade.entryPrice - candleLow);
-                const currentFloatingPoints = isBuy ? (currentPrice - trade.entryPrice) : (trade.entryPrice - currentPrice);
-                const progressRatio = totalTargetPoints > 0 ? (maxFloatingPoints / totalTargetPoints) : 0;
+                const target50 = isBuy
+                  ? trade.entryPrice + 0.5 * (trade.tp - trade.entryPrice)
+                  : trade.entryPrice - 0.5 * (trade.entryPrice - trade.tp);
 
-                // أ. الوقف المتحرك المتدرج الذكي (Balanced Stepped Lock):
-                // يمنح الصفقة مساحة تنفس طبيعية للوصول للهدف الكامل (لا للجبن)،
-                // وفي نفس الوقت يؤمن الدخول والأرباح كاش (لا للتهور).
-                let stepLockPoints = 0;
-                if (progressRatio >= 0.80) {
-                  // تقدم 80% (قريب جداً من الهدف الكامل): حجز 60% من الأرباح كاش
-                  stepLockPoints = Number((maxFloatingPoints * 0.60).toFixed(2));
-                } else if (progressRatio >= 0.60) {
-                  // تقدم 60% (أكثر من نصف الطريق): حجز 35% من الأرباح كاش
-                  stepLockPoints = Number((maxFloatingPoints * 0.35).toFixed(2));
-                } else if (progressRatio >= 0.40) {
-                  // تقدم 40%: تأمين نقطة الدخول فوراً مع تكلفة السبريد (+0.5 نقطة) لتصبح صفقة خالية من المخاطرة
-                  stepLockPoints = 0.50;
-                }
+                const is50PercentReached = isBuy
+                  ? (candleHigh >= target50 || currentPrice >= target50)
+                  : (candleLow <= target50 || currentPrice <= target50);
 
-                if (stepLockPoints > 0) {
-                  const candidateSl = isBuy
-                    ? Number((trade.entryPrice + stepLockPoints).toFixed(2))
-                    : Number((trade.entryPrice - stepLockPoints).toFixed(2));
-
-                  const isImprovement = isBuy ? candidateSl > trade.sl : candidateSl < trade.sl;
-                  if (isImprovement) {
-                    trade.sl = candidateSl;
-                    trade.breakevenApplied = true;
-                    await trade.save();
-
-                    const lockMsg = `🔒 تأمين أرباح الذهب الذكي 🎯\n- الأصل: ${trade.symbol}\n- تم رفع الوقف لحجز +${stepLockPoints} نقطة كاش (${(progressRatio * 100).toFixed(0)}% من مسار الهدف)!\n- الوقف الجديد: ${formatPrice(trade.sl)}`;
-                    logs.push(lockMsg);
-                    console.log(lockMsg);
-                    await sendTelegramNotification(lockMsg);
-                  }
-                }
-
-                // ب. مهارة خطف الأرباح المتزنة (Anti-Greed / Anti-Reversal Snatch):
-                // لا نخرج عند تذبذب بسيط، بل نتدخل فقط إذا تقدمت الصفقة لمعظم المسار (>= 70%) وأظهرت ارتداداً حقيقياً قوياً (>= 40% من القمة)
-                let momentumSnatchTriggered = false;
-                if (progressRatio >= 0.70 && currentFloatingPoints > 0) {
-                  const retracement = maxFloatingPoints - currentFloatingPoints;
-                  if (retracement >= maxFloatingPoints * 0.40) {
-                    momentumSnatchTriggered = true;
-                  }
-                }
-
-                // فحص ضرب الوقف المؤمن (فقط بعد تأمين الصفقة ورفع الستوب لحجز الأرباح لمنع الخروج المبكر بعد دقيقة واحدة):
-                const lockedSlHit = trade.breakevenApplied && (
-                  isBuy
-                    ? (candleLow <= trade.sl || currentPrice <= trade.sl)
-                    : (candleHigh >= trade.sl || currentPrice >= trade.sl)
-                );
-
-                if (momentumSnatchTriggered || lockedSlHit) {
-                  const exitPrice = momentumSnatchTriggered ? currentPrice : trade.sl;
-                  const closedAt = new Date();
-                  const rawDiff = isBuy ? (exitPrice - trade.entryPrice) : (trade.entryPrice - exitPrice);
-                  const pnlPoints = Number(rawDiff.toFixed(2));
-
-                  // حساب النتيجة الدقيقة بدون أخطاء حسابية:
-                  let finalStatus: 'WIN' | 'BREAKEVEN' | 'LOSS' = 'LOSS';
-                  if (pnlPoints > 0.10) {
-                    finalStatus = 'WIN';
-                  } else if (pnlPoints >= -0.10) {
-                    finalStatus = 'BREAKEVEN';
-                  } else {
-                    finalStatus = 'LOSS';
-                  }
-
-                  const lotSize = trade.suggestedLotSize || 0.01;
-                  const isBe = finalStatus === 'BREAKEVEN';
-                  const detailed = calculateDetailedPnL(pnlPoints, lotSize, trade.symbol, isBe);
-
-                  const accountUpdate = await applyTradeResultToAccount(detailed.netPnLUSD, finalStatus, trade._id.toString());
-                  currentLiveBal = accountUpdate.newBalance;
-
-                  await TradeHistory.create({
-                    tradeId: trade._id.toString(),
-                    symbol: trade.symbol,
-                    action: trade.action,
-                    tradeType: trade.tradeType,
-                    entryPrice: trade.entryPrice,
-                    exitPrice,
-                    sl: trade.sl,
-                    tp: trade.tp,
-                    status: finalStatus,
-                    suggestedLotSize: lotSize,
-                    pnlPoints,
-                    grossPnLUSD: detailed.grossPnLUSD,
-                    tradingFeeUSD: detailed.tradingFeeUSD,
-                    netPnLUSD: detailed.netPnLUSD,
-                    balanceAfterTrade: accountUpdate.newBalance,
-                    rsi: trade.rsi,
-                    ema20: trade.ema20,
-                    ema100: trade.ema100 || trade.ema200,
-                    atr: trade.atr,
-                    groqAnalysis: trade.groqAnalysis,
-                    entryTimestamp: trade.timestamp,
-                    closedAt
-                  });
-
-                  trade.status = 'ARCHIVED';
-                  trade.exitPrice = exitPrice;
-                  trade.closedAt = closedAt;
-                  trade.pnlPoints = pnlPoints;
-                  trade.netPnLUSD = detailed.netPnLUSD;
-                  trade.balanceAfterTrade = accountUpdate.newBalance;
-                  await trade.save();
-
-                  let outcomeMsg = '';
-                  if (finalStatus === 'WIN') {
-                    const exitReasonText = momentumSnatchTriggered
-                      ? `⚡ خطف الربح فوراً بسعر السوق (+${pnlPoints} نقطة / +${detailed.netPnLUSD.toFixed(2)} دولار)`
-                      : `🔒 إغلاق بتأمين الأرباح المتدرج (+${pnlPoints} نقطة / +${detailed.netPnLUSD.toFixed(2)} دولار)`;
-                    outcomeMsg = `🏆 إغلاق وحجز أرباح الذهب بنجاح! 💵\n- الأصل: ${trade.symbol}\n- السبب: ${exitReasonText}\n- سعر الخروج: ${formatPrice(exitPrice)}\n- صافي الربح: +${detailed.netPnLUSD.toFixed(2)} دولار (+${pnlPoints} نقطة) | الحجم: ${lotSize.toFixed(2)} لوت\n- رصيد الحساب الآن: ${accountUpdate.newBalance.toFixed(2)} دولار`;
-                  } else if (finalStatus === 'BREAKEVEN') {
-                    outcomeMsg = `🛡️ إغلاق صفقة الذهب على نقطة التعادل (Breakeven) ⚖️\n- الأصل: ${trade.symbol}\n- سعر الخروج: ${formatPrice(exitPrice)}\n- النتيجة: حماية رأس المال (${detailed.netPnLUSD.toFixed(2)} دولار رسوم)\n- رصيد الحساب الآن: ${accountUpdate.newBalance.toFixed(2)} دولار`;
-                  } else {
-                    outcomeMsg = `🛑 إغلاق صفقة الذهب على وقف الخسارة 📉\n- الأصل: ${trade.symbol}\n- سعر الخروج: ${formatPrice(exitPrice)}\n- الخسارة: ${pnlPoints.toFixed(2)} نقطة (${detailed.netPnLUSD.toFixed(2)} دولار) | الحجم: ${lotSize.toFixed(2)} لوت\n- رصيد الحساب الآن: ${accountUpdate.newBalance.toFixed(2)} دولار`;
-                  }
-
-                  logs.push(outcomeMsg);
-                  console.log(outcomeMsg);
-                  await sendTelegramNotification(outcomeMsg);
-                  continue;
-                }
-              } else if (!trade.breakevenApplied) {
-                // Standard Breakeven for other symbols
-                let is50PercentReached = false;
-                if (trade.action === 'BUY') {
-                  const target50 = trade.entryPrice + 0.5 * (trade.tp - trade.entryPrice);
-                  if (candleHigh >= target50) is50PercentReached = true;
-                } else if (trade.action === 'SELL') {
-                  const target50 = trade.entryPrice - 0.5 * (trade.entryPrice - trade.tp);
-                  if (candleLow <= target50) is50PercentReached = true;
-                }
                 if (is50PercentReached) {
-                  trade.sl = trade.entryPrice;
+                  const isGold = matchingItem.symbol.includes('XAU') || matchingItem.symbol.includes('GOLD');
+                  const beBuffer = isGold ? 0.50 : 0.0; // نصف نقطة ربح كاش لتغطية السبريد وحجز ربح بسيط
+                  const newSl = isBuy
+                    ? Number((trade.entryPrice + beBuffer).toFixed(2))
+                    : Number((trade.entryPrice - beBuffer).toFixed(2));
+
+                  trade.sl = newSl;
                   trade.breakevenApplied = true;
                   await trade.save();
-                  const breakevenMsg = `🛡️ (BREAKEVEN) Risk Free!\nتم تحريك الستوب (SL) إلى نقطة الدخول ${formatPrice(trade.entryPrice)} لرمز ${trade.symbol}.`;
+
+                  const breakevenMsg = `🛡️ تأمين الصفقة بربح بسيط (Enhanced Breakeven) 🎯\n- الأصل: ${trade.symbol}\n- وصول السعر إلى 50% من مسار الهدف!\n- تم رفع الوقف إلى ${formatPrice(newSl)} لحجز ربح +${beBuffer} نقطة وتغطية السبريد بالكامل (صفقة خالية من المخاطرة 100%)!`;
                   logs.push(breakevenMsg);
+                  console.log(breakevenMsg);
                   await sendTelegramNotification(breakevenMsg);
                 }
               }
@@ -555,11 +458,16 @@ async function runScalperEngine() {
 
                 if (isProfit) {
                   if (!trade.breakevenApplied || trade.sl !== trade.entryPrice) {
-                    trade.sl = trade.entryPrice;
+                    const isGold = matchingItem.symbol.includes('XAU') || matchingItem.symbol.includes('GOLD');
+                    const beBuffer = isGold ? 0.50 : 0.0;
+                    const newSl = trade.action === 'BUY'
+                      ? Number((trade.entryPrice + beBuffer).toFixed(2))
+                      : Number((trade.entryPrice - beBuffer).toFixed(2));
+                    trade.sl = newSl;
                     trade.breakevenApplied = true;
                     await trade.save();
 
-                    const timeStopMsg = `⏱️ **(SMART TIME STOP)**\nمرور 120 دقيقة والصفقة رابحة! تم تحريك الستوب إلى نقطة الدخول (Breakeven) لرمز ${trade.symbol}.`;
+                    const timeStopMsg = `⏱️ **(SMART TIME STOP)**\nمرور 120 دقيقة والصفقة رابحة! تم تحريك الستوب إلى تأمين الدخول (Breakeven +${beBuffer} نقطة) لرمز ${trade.symbol}.`;
                     logs.push(timeStopMsg);
                     console.log(timeStopMsg);
                     await sendTelegramNotification(timeStopMsg);
@@ -611,7 +519,7 @@ async function runScalperEngine() {
                   trade.balanceAfterTrade = accountUpdate.newBalance;
                   await trade.save();
 
-                  const timeStopMsg = `⏱️ **(TIME STOP)**\nمرور 120 دقيقة والصفقة خاسرة. تم إغلاق الصفقة بسعر السوق $${formatPrice(currentPrice)} لرمز ${trade.symbol} لتفريغ السيولة (الخسارة: $${detailed.netPnLUSD.toFixed(2)}).`;
+                  const timeStopMsg = `⏱️ **(TIME STOP)**\nمرور 120 دقيقة والصفقة خاسرة. تم إغلاق الصفقة بسعر السوق ${formatPrice(currentPrice)} لرمز ${trade.symbol} لتفريغ السيولة (الخسارة: ${detailed.netPnLUSD.toFixed(2)} دولار).\nرصيد الحساب: ${accountUpdate.newBalance.toFixed(2)} دولار`;
                   logs.push(timeStopMsg);
                   console.log(timeStopMsg);
                   await sendTelegramNotification(timeStopMsg);

@@ -313,7 +313,7 @@ export function calculateDetailedPnL(
   const contractSize = spec.contractSize;
 
   // 1. Gross PnL (الربح الإجمالي النظري)
-  const grossPnLUSD = isBreakeven ? 0 : Number((pnlPoints * lotSize * contractSize).toFixed(2));
+  const grossPnLUSD = Number((pnlPoints * lotSize * contractSize).toFixed(2));
 
   // 2. تكاليف التداول (السبريد + الانزلاق + العمولة)
   const envCommission = process.env.COMMISSION_PER_LOT ? parseFloat(process.env.COMMISSION_PER_LOT) : spec.commissionPerLotUSD;
