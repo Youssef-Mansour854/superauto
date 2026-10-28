@@ -29,7 +29,7 @@ export interface ScalpWatchlistItem {
 
 // Watchlist symbols for 5-minute High-Frequency Scalper Engine (September 9 Strategy)
 export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
-  { symbol: 'XAU/USD', source: 'YAHOO', enabled: true },
+  { symbol: 'XAU/USD', source: 'BINANCE', enabled: true },
   {
     symbol: 'EUR/USD',
     source: 'TWELVEDATA',
@@ -52,7 +52,7 @@ export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
 
 function normalizeSymbol(symbol: string): { symbol: string; source: string } {
   if (symbol === 'XAUUSD=X' || symbol === 'XAUUSD' || symbol === 'XAU/USD') {
-    return { symbol: 'XAU/USD', source: 'YAHOO' };
+    return { symbol: 'XAU/USD', source: 'BINANCE' };
   }
   if (symbol === 'EURUSD=X' || symbol === 'EURUSD' || symbol === 'EUR/USD') {
     return { symbol: 'EUR/USD', source: 'TWELVEDATA' };
@@ -127,37 +127,33 @@ function isForexPair(symbol: string): boolean {
 }
 
 async function fetchAsset5mCandles(symbol: string, source: string): Promise<Candle[]> {
-  if (source === 'BINANCE') {
-    return await fetchBinanceKlines(symbol, '5m', 250);
-  }
-  // 1. Ultra-Fast Zero-Delay Real-time Spot Feed for Gold (Binance PAXG tracks XAU/USD 1:1 with 0 seconds latency and unlimited free requests)
-  if (symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'PAXGUSDT') {
+  const isGold = symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'PAXGUSDT';
+
+  // 1. Ultra-Fast Zero-Delay Real-time Spot Feed for Gold via Binance (PAXGUSDT tracks spot gold 1:1 down to the cent with 0 seconds latency)
+  if (source === 'BINANCE' || isGold) {
     try {
-      const liveGoldCandles = await fetchBinanceKlines('PAXGUSDT', '5m', 250);
-      if (liveGoldCandles && liveGoldCandles.length >= 100) {
-        return liveGoldCandles;
+      const binanceSymbol = isGold ? 'PAXGUSDT' : symbol;
+      const binanceCandles = await fetchBinanceKlines(binanceSymbol, '5m', 250);
+      if (binanceCandles && binanceCandles.length >= 100) {
+        return binanceCandles;
       }
     } catch (binanceErr: any) {
-      console.warn('Realtime Gold feed via Binance temporarily failed, falling back to Yahoo Finance:', binanceErr?.message || binanceErr);
+      console.warn(`[Data Feed] Binance fetch failed for ${symbol}: ${binanceErr?.message || binanceErr}, trying fallbacks...`);
     }
   }
+
   // 2. High-reliability Fallback: Yahoo Finance
-  if (source === 'YAHOO' || symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F') {
+  if (source === 'YAHOO' || isGold) {
     const yahooCandles = await fetchYahoo5mKlines(symbol);
     if (yahooCandles && yahooCandles.length > 0) {
       return yahooCandles;
     }
   }
+
+  // 3. Fallback: Twelve Data
   const result = await fetchTwelveData5mKlines(symbol, '5min', 250);
   if (result?.candles && result.candles.length > 0) {
     return result.candles;
-  }
-  // Secondary fallback for other assets
-  if (symbol === 'QQQ' || symbol.includes('IXIC')) {
-    const yahooCandles = await fetchYahoo5mKlines(symbol);
-    if (yahooCandles && yahooCandles.length > 0) {
-      return yahooCandles;
-    }
   }
   return [];
 }
@@ -630,6 +626,8 @@ async function runScalperEngine() {
       }
 
       const { currentClose, currentLow, currentHigh, currentEma20, currentEma100, currentEma200, currentRsi, prevRsi, currentAtr } = ind;
+      const latestCandleTime = new Date(candles[candles.length - 1].openTime).toLocaleTimeString('en-US', { timeZone: 'Africa/Cairo' });
+      logs.push(`[Data Feed Confirmed: BINANCE] Fetched ${candles.length} candles for ${symbol}. Latest price: ${currentClose} (Candle Cairo time: ${latestCandleTime})`);
 
       // توافق الصورة الكبيرة والاتجاه العام (Macro Trend Confluence via EMA200 & EMA100):
       // EMA200 على فريم الـ 5 دقائق = 16.6 ساعة حركة سعر (الاتجاه الكلي لليوم).
