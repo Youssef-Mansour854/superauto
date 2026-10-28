@@ -4,6 +4,7 @@ import Trade from '@/models/Trade';
 import TradeHistory from '@/models/TradeHistory';
 import { fetchBinanceKlines, Candle } from '@/lib/binance';
 import { fetchTwelveData5mKlines } from '@/lib/twelvedata';
+import { fetchYahoo5mKlines } from '@/lib/yfinance';
 import { calculateScalpIndicators, formatPrice } from '@/lib/indicators';
 import { generateGroqArabicAlert, validateTradeConfluenceWithGroq } from '@/lib/groq';
 import { sendTelegramNotification } from '@/lib/telegram';
@@ -125,7 +126,17 @@ async function fetchAsset5mCandles(symbol: string, source: string): Promise<Cand
     return await fetchBinanceKlines(symbol, '5m', 250);
   }
   const result = await fetchTwelveData5mKlines(symbol, '5min', 250);
-  return result?.candles || [];
+  if (result?.candles && result.candles.length > 0) {
+    return result.candles;
+  }
+  // High-reliability Fallback: Yahoo Finance if Twelve Data is empty or rate-limited
+  if (symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'QQQ' || symbol.includes('IXIC')) {
+    const yahooCandles = await fetchYahoo5mKlines(symbol);
+    if (yahooCandles && yahooCandles.length > 0) {
+      return yahooCandles;
+    }
+  }
+  return [];
 }
 
 async function runScalperEngine() {
@@ -168,11 +179,17 @@ async function runScalperEngine() {
             continue;
           }
           const candles = await fetchAsset5mCandles(matchingItem.symbol, matchingItem.source);
+          if (!candles || candles.length === 0) {
+            logs.push(`[Pending Evaluation] Could not fetch candles for ${trade.symbol}. Will retry next cycle.`);
+            continue;
+          }
+
           if (candles && candles.length > 0) {
             const currentCandle = candles[candles.length - 1];
             const currentPrice = currentCandle.close;
             const candleHigh = currentCandle.high !== undefined ? currentCandle.high : currentPrice;
             const candleLow = currentCandle.low !== undefined ? currentCandle.low : currentPrice;
+            logs.push(`[Pending Trade ${trade.symbol}] Current: $${formatPrice(currentPrice)} | High: $${formatPrice(candleHigh)} | Low: $${formatPrice(candleLow)} | TP: $${formatPrice(trade.tp)} | SL: $${formatPrice(trade.sl)}`);
             let newStatus: 'WIN' | 'LOSS' | 'BREAKEVEN' | null = null;
             let exitPrice = currentPrice;
 

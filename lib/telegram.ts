@@ -16,6 +16,7 @@ export async function sendTelegramNotification(textMessage: string): Promise<boo
 
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
 
+  // 1. First attempt: Standard Markdown
   try {
     const response = await axios.post(
       url,
@@ -28,14 +29,34 @@ export async function sendTelegramNotification(textMessage: string): Promise<boo
     );
 
     if (response.data?.ok) {
-      console.log('Telegram notification delivered successfully.');
+      console.log('Telegram notification delivered successfully (Markdown).');
       return true;
-    } else {
-      console.error('Telegram API response returned not OK:', response.data);
-      return false;
     }
   } catch (error: any) {
-    console.error('Error sending Telegram notification:', error?.response?.data || error?.message || error);
+    const errorDesc = error?.response?.data?.description || error?.message || '';
+    console.warn(`Telegram Markdown parse failed (${errorDesc}). Retrying immediately with plain text fallback...`);
+  }
+
+  // 2. Reliable Fallback: Plain Text (Guarantees messages are NEVER lost due to unescaped markdown)
+  try {
+    const fallbackResponse = await axios.post(
+      url,
+      {
+        chat_id: chatId,
+        text: textMessage,
+      },
+      { timeout: 8000 }
+    );
+
+    if (fallbackResponse.data?.ok) {
+      console.log('Telegram notification delivered successfully via plain text fallback.');
+      return true;
+    } else {
+      console.error('Telegram API fallback returned not OK:', fallbackResponse.data);
+      return false;
+    }
+  } catch (fallbackError: any) {
+    console.error('Error sending Telegram notification even without parse_mode:', fallbackError?.response?.data || fallbackError?.message);
     return false;
   }
 }
