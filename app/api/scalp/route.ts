@@ -364,26 +364,19 @@ async function runScalperEngine() {
                 const currentFloatingPoints = isBuy ? (currentPrice - trade.entryPrice) : (trade.entryPrice - currentPrice);
                 const progressRatio = totalTargetPoints > 0 ? (maxFloatingPoints / totalTargetPoints) : 0;
 
-                // أ. مهارة خطف الأرباح (Momentum Snatch): الخروج بسعر السوق إذا ارتد السعر 25% من القمة بعد تقدم >= 50%
-                let momentumSnatchTriggered = false;
-                const atrVal = trade.atr || 2.5;
-                if ((progressRatio >= 0.50 || maxFloatingPoints >= atrVal * 1.2) && currentFloatingPoints > 0) {
-                  const retracement = maxFloatingPoints - currentFloatingPoints;
-                  if (retracement >= maxFloatingPoints * 0.25) {
-                    momentumSnatchTriggered = true;
-                  }
-                }
-
-                // ب. الوقف المتحرك المتدرج (Stepped Dynamic Lock):
+                // أ. الوقف المتحرك المتدرج الذكي (Balanced Stepped Lock):
+                // يمنح الصفقة مساحة تنفس طبيعية للوصول للهدف الكامل (لا للجبن)،
+                // وفي نفس الوقت يؤمن الدخول والأرباح كاش (لا للتهور).
                 let stepLockPoints = 0;
-                if (progressRatio >= 0.85) {
-                  stepLockPoints = Number((maxFloatingPoints * 0.70).toFixed(2));
-                } else if (progressRatio >= 0.70) {
-                  stepLockPoints = Number((maxFloatingPoints * 0.50).toFixed(2));
-                } else if (progressRatio >= 0.50) {
-                  stepLockPoints = Number((maxFloatingPoints * 0.30).toFixed(2));
-                } else if (progressRatio >= 0.35) {
-                  stepLockPoints = 0.50; // تأمين الدخول وتكلفة السبريد
+                if (progressRatio >= 0.80) {
+                  // تقدم 80% (قريب جداً من الهدف الكامل): حجز 60% من الأرباح كاش
+                  stepLockPoints = Number((maxFloatingPoints * 0.60).toFixed(2));
+                } else if (progressRatio >= 0.60) {
+                  // تقدم 60% (أكثر من نصف الطريق): حجز 35% من الأرباح كاش
+                  stepLockPoints = Number((maxFloatingPoints * 0.35).toFixed(2));
+                } else if (progressRatio >= 0.40) {
+                  // تقدم 40%: تأمين نقطة الدخول فوراً مع تكلفة السبريد (+0.5 نقطة) لتصبح صفقة خالية من المخاطرة
+                  stepLockPoints = 0.50;
                 }
 
                 if (stepLockPoints > 0) {
@@ -397,10 +390,20 @@ async function runScalperEngine() {
                     trade.breakevenApplied = true;
                     await trade.save();
 
-                    const lockMsg = `🔒 تأمين أرباح الذهب المتدرج (Gold Profit Lock) 🎯\n- الأصل: ${trade.symbol}\n- تم رفع الوقف لحجز +${stepLockPoints} نقطة كاش (${(progressRatio * 100).toFixed(0)}% من مسار الهدف)!\n- الوقف الجديد: ${formatPrice(trade.sl)}`;
+                    const lockMsg = `🔒 تأمين أرباح الذهب الذكي 🎯\n- الأصل: ${trade.symbol}\n- تم رفع الوقف لحجز +${stepLockPoints} نقطة كاش (${(progressRatio * 100).toFixed(0)}% من مسار الهدف)!\n- الوقف الجديد: ${formatPrice(trade.sl)}`;
                     logs.push(lockMsg);
                     console.log(lockMsg);
                     await sendTelegramNotification(lockMsg);
+                  }
+                }
+
+                // ب. مهارة خطف الأرباح المتزنة (Anti-Greed / Anti-Reversal Snatch):
+                // لا نخرج عند تذبذب بسيط، بل نتدخل فقط إذا تقدمت الصفقة لمعظم المسار (>= 70%) وأظهرت ارتداداً حقيقياً قوياً (>= 40% من القمة)
+                let momentumSnatchTriggered = false;
+                if (progressRatio >= 0.70 && currentFloatingPoints > 0) {
+                  const retracement = maxFloatingPoints - currentFloatingPoints;
+                  if (retracement >= maxFloatingPoints * 0.40) {
+                    momentumSnatchTriggered = true;
                   }
                 }
 
