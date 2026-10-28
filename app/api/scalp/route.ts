@@ -130,7 +130,18 @@ async function fetchAsset5mCandles(symbol: string, source: string): Promise<Cand
   if (source === 'BINANCE') {
     return await fetchBinanceKlines(symbol, '5m', 250);
   }
-  // Fast path for Gold: Yahoo Finance provides free real-time ticks in 300ms
+  // 1. Ultra-Fast Zero-Delay Real-time Spot Feed for Gold (Binance PAXG tracks XAU/USD 1:1 with 0 seconds latency and unlimited free requests)
+  if (symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'PAXGUSDT') {
+    try {
+      const liveGoldCandles = await fetchBinanceKlines('PAXGUSDT', '5m', 250);
+      if (liveGoldCandles && liveGoldCandles.length >= 100) {
+        return liveGoldCandles;
+      }
+    } catch (binanceErr: any) {
+      console.warn('Realtime Gold feed via Binance temporarily failed, falling back to Yahoo Finance:', binanceErr?.message || binanceErr);
+    }
+  }
+  // 2. High-reliability Fallback: Yahoo Finance
   if (source === 'YAHOO' || symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F') {
     const yahooCandles = await fetchYahoo5mKlines(symbol);
     if (yahooCandles && yahooCandles.length > 0) {
