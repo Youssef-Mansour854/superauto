@@ -34,6 +34,7 @@ export async function generateGroqArabicAlert(data: GroqSignalData): Promise<str
   const apiKey = process.env.GROQ_API_KEY;
 
   const ema100Val = data.ema100 !== undefined ? data.ema100 : data.ema200;
+  const ema200Val = data.ema200;
 
   const defaultFallback = data.action === 'BUY'
     ? `🚨 **صفقة سكالبينج سريعة (شراء) 🔥**\nرمز العملة: ${data.symbol}\nسعر الدخول: $${formatPrice(data.entryPrice)}\nهدف أرباح (TP - ATR 3x): $${formatPrice(data.tp)}\nوقف خسارة (SL - ATR 1.5x): $${formatPrice(data.sl)}\nمؤشر RSI: ${formatPrice(data.rsi)} | EMA20: $${formatPrice(data.ema20)}${ema100Val !== undefined ? ` | EMA100: $${formatPrice(ema100Val)}` : ''}\nفرصة صعودية قوية مع الاتجاه العام!`
@@ -49,12 +50,12 @@ export async function generateGroqArabicAlert(data: GroqSignalData): Promise<str
 اكتب تنبيه تداول سكالبينج حماسي بلهجة مصرية عامية بناءً على البيانات التالية:
 - العملة/الأصل: ${data.symbol}
 - نوع الصفقة: ${data.action === 'BUY' ? 'شراء (BUY)' : 'بيع (SELL)'}
-- سعر الدخول الحالي: $${formatPrice(data.entryPrice)}
-- Stop Loss (وقف الخسارة - 1.5x ATR): $${formatPrice(data.sl)}
-- Take Profit (هدف الأرباح - 3.0x ATR): $${formatPrice(data.tp)}
+- سعر الدخول الحالي: ${formatPrice(data.entryPrice)}
+- Stop Loss (وقف الخسارة - 1.5x ATR): ${formatPrice(data.sl)}
+- Take Profit (هدف الأرباح - 2.0x ATR): ${formatPrice(data.tp)}
 - مؤشر RSI (14): ${formatPrice(data.rsi)}
-- مؤشر EMA (20): $${formatPrice(data.ema20)}
-${ema100Val !== undefined ? `- مؤشر EMA (100): $${formatPrice(ema100Val)}\n` : ''}${data.atr ? `- مؤشر ATR (14): $${formatPrice(data.atr)}\n` : ''}
+- مؤشر EMA (20): ${formatPrice(data.ema20)}
+${ema100Val !== undefined ? `- مؤشر EMA (100): ${formatPrice(ema100Val)}\n` : ''}${ema200Val !== undefined ? `- مؤشر EMA (200) [الاتجاه العام للصورة الكبيرة]: ${formatPrice(ema200Val)}\n` : ''}${data.atr ? `- مؤشر ATR (14): ${formatPrice(data.atr)}\n` : ''}
 قواعد هامة للتنسيق:
 1. اكتب الأسعار كأرقام واضحة ومباشرة (مثال: 4047.37) بدون وضع علامة الدولار ($) وبدون وضع أي نجوم (**) ملاصقة لها نهائياً.
 2. اجعل التنبيه مركزاً وقصيراً وحماسياً ويشجع على التنفيذ السريع ويوضح المستويات المالية بوضوح تام.
@@ -114,7 +115,7 @@ export async function generateGroqSwingAnalysis(data: GroqSwingData): Promise<st
 
 - السهم: ${data.symbol}
 - توصية النمط: ${data.action === 'BUY' ? 'شراء سوينغ (BUY)' : 'بيع / جني أرباح (SELL)'}
-- السعر الحالي: $${formatPrice(data.entryPrice)}
+- السعر الحالي: ${formatPrice(data.entryPrice)}
 - المتوسط المتحرك SMA 50: $${formatPrice(data.sma50)}
 - خط MACD: ${formatPrice(data.macd)} (خط الإشارة: ${formatPrice(data.macdSignal)})
 - Stop Loss: $${formatPrice(data.sl)}
@@ -165,6 +166,7 @@ export interface TradeValidationData {
   rsi: number;
   ema20: number;
   ema100: number;
+  ema200?: number;
   atr: number;
   isMonday?: boolean;
 }
@@ -227,17 +229,18 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
   const userPrompt = `
 قم بتقييم إشارة السكالبينج التالية لـ ${data.symbol}:
 - نوع الصفقة: ${data.action} (${data.triggerReason === 'PULLBACK' ? 'ارتداد EMA20' : 'تقاطع زخم RSI'})
-- السعر الحالي: $${formatPrice(data.entryPrice)}
-- Stop Loss: $${formatPrice(data.sl)} | Take Profit: $${formatPrice(data.tp)}
+- السعر الحالي: ${formatPrice(data.entryPrice)}
+- Stop Loss: ${formatPrice(data.sl)} | Take Profit: ${formatPrice(data.tp)}
 - RSI (14): ${formatPrice(data.rsi)}
-- EMA 20: $${formatPrice(data.ema20)} | EMA 100: $${formatPrice(data.ema100)}
+- EMA 20: ${formatPrice(data.ema20)} | EMA 100: ${formatPrice(data.ema100)}${data.ema200 !== undefined ? ` | EMA 200 (الصورة الكبيرة): ${formatPrice(data.ema200)}` : ''}
 - ATR (14): $${formatPrice(data.atr)}${mondayInstruction}${aiMemoryRulesSection}
 
 شروط التقييم الصارم:
 - اعطِ درجة من 1 إلى 10 (الموافقة تتطلب تقييم صارم 7.5 أو أعلى).
 - إذا كانت الصفقة BUY و RSI > 65، أو السعر متضخم وبعيد عن EMA20 -> ارفض (Score < 7.5).
 - إذا كانت الصفقة SELL و RSI < 35، أو السعر منخفض جداً وبعيد عن EMA20 -> ارفض (Score < 7.5).
-- إذا كانت الشموع متوافقة مع الاتجاه والـ RSI متزن ومسافة الـ SL مناسبة -> وافق.
+- تحقق من الصورة الكبيرة (EMA200): في الشراء يجب أن يكون السعر أعلى من EMA200 (اتجاه صاعد)، وفي البيع أدنى من EMA200 (اتجاه هابط).
+- إذا كانت الشموع متوافقة مع الاتجاه والصورة الكبيرة والـ RSI متزن ومسافة الـ SL مناسبة -> وافق.
 أخرج كود JSON فقط.
 `;
 

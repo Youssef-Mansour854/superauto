@@ -36,7 +36,12 @@ export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
     enabled: false,
     notes: 'PAUSED: marginal edge even after best tuning found (session filter + TP 3.0x ATR), still net negative (-40 pips / PF 0.94 over 71 days). Revisit only with a different entry strategy (mean-reversion, not trend-following).'
   },
-  { symbol: 'QQQ', source: 'TWELVEDATA', enabled: true },
+  {
+    symbol: 'QQQ',
+    source: 'TWELVEDATA',
+    enabled: false,
+    notes: 'DISABLED: 100% focus exclusively on Gold (XAU/USD) per trader request.'
+  },
   {
     symbol: 'BTC/USD',
     source: 'TWELVEDATA',
@@ -189,7 +194,7 @@ async function runScalperEngine() {
             const currentPrice = currentCandle.close;
             const candleHigh = currentCandle.high !== undefined ? currentCandle.high : currentPrice;
             const candleLow = currentCandle.low !== undefined ? currentCandle.low : currentPrice;
-            logs.push(`[Pending Trade ${trade.symbol}] Current: $${formatPrice(currentPrice)} | High: $${formatPrice(candleHigh)} | Low: $${formatPrice(candleLow)} | TP: $${formatPrice(trade.tp)} | SL: $${formatPrice(trade.sl)}`);
+            logs.push(`[Pending Trade ${trade.symbol}] Current: ${formatPrice(currentPrice)} | High: ${formatPrice(candleHigh)} | Low: ${formatPrice(candleLow)} | TP: ${formatPrice(trade.tp)} | SL: ${formatPrice(trade.sl)}`);
             let newStatus: 'WIN' | 'LOSS' | 'BREAKEVEN' | null = null;
             let exitPrice = currentPrice;
 
@@ -606,16 +611,26 @@ async function runScalperEngine() {
         return { symbol, signalTriggered: false, skipped: true, reason: msg };
       }
 
-      const { currentClose, currentLow, currentHigh, currentEma20, currentEma100, currentRsi, prevRsi, currentAtr } = ind;
+      const { currentClose, currentLow, currentHigh, currentEma20, currentEma100, currentEma200, currentRsi, prevRsi, currentAtr } = ind;
+
+      // توافق الصورة الكبيرة والاتجاه العام (Macro Trend Confluence via EMA200 & EMA100):
+      // EMA200 على فريم الـ 5 دقائق = 16.6 ساعة حركة سعر (الاتجاه الكلي لليوم).
+      // EMA100 = 8.3 ساعات (اتجاه الجلسة الحالي).
+      const isMacroBullish = currentClose > currentEma100 && (currentEma200 ? currentClose > currentEma200 : true);
+      const isMacroBearish = currentClose < currentEma100 && (currentEma200 ? currentClose < currentEma200 : true);
+
+      // فلتر عدم ملاحقة السعر (Anti-Chasing Value Zone): الدخول بالقرب من EMA20 وليس عند قمم وقيعان متطرفة
+      const isWithinBuyZone = (currentClose - currentEma20) <= (currentAtr * 0.85);
+      const isWithinSellZone = (currentEma20 - currentClose) <= (currentAtr * 0.85);
 
       // Trend-Filtered Dynamic Momentum Strategy Rules:
       // 1. Initial Crossover Trigger (RSI Level 50 Crossover in Trend):
-      const isBuyCrossover = currentClose > currentEma100 && currentClose > currentEma20 && prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68;
-      const isSellCrossover = currentClose < currentEma100 && currentClose < currentEma20 && prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32;
+      const isBuyCrossover = isMacroBullish && currentClose > currentEma20 && prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68 && isWithinBuyZone;
+      const isSellCrossover = isMacroBearish && currentClose < currentEma20 && prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32 && isWithinSellZone;
 
       // 2. Trend Continuation Pullback / Retest to EMA20 Trigger:
-      const isBuyPullback = currentClose > currentEma100 && currentEma20 > currentEma100 && currentLow <= currentEma20 && currentClose >= currentEma20 && currentRsi >= 48 && currentRsi <= 68;
-      const isSellPullback = currentClose < currentEma100 && currentEma20 < currentEma100 && currentHigh >= currentEma20 && currentClose <= currentEma20 && currentRsi <= 52 && currentRsi >= 32;
+      const isBuyPullback = isMacroBullish && currentEma20 > currentEma100 && currentLow <= currentEma20 && currentClose >= currentEma20 && currentRsi >= 48 && currentRsi <= 68;
+      const isSellPullback = isMacroBearish && currentEma20 < currentEma100 && currentHigh >= currentEma20 && currentClose <= currentEma20 && currentRsi <= 52 && currentRsi >= 32;
 
       let signalType: 'BUY' | 'SELL' | null = null;
       let triggerReason: 'CROSSOVER' | 'PULLBACK' | null = null;
@@ -673,6 +688,7 @@ async function runScalperEngine() {
         rsi: currentRsi,
         ema20: currentEma20,
         ema100: currentEma100,
+        ema200: currentEma200,
         atr: currentAtr
       };
 
@@ -688,6 +704,7 @@ async function runScalperEngine() {
         rsi: currentRsi,
         ema20: currentEma20,
         ema100: currentEma100,
+        ema200: currentEma200,
         atr: currentAtr,
         isMonday: isMondayToday
       });
@@ -723,7 +740,8 @@ async function runScalperEngine() {
         : '⚡ تقاطع زخم مع الاتجاه (RSI Crossover)';
 
       // Send Telegram Alert
-      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- نوع الدخول: ${entryTypeArabic}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- سعر الدخول: ${formatPrice(currentClose)}\n- حجم اللوت المقترح: ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: $${posSize.actualRiskUSD.toFixed(2)})\n- وقف الخسارة SL (1.5x ATR): ${formatPrice(sl)}\n- الهدف TP (2.0x ATR): ${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): ${formatPrice(beTargetPrice)}\n- مؤشر ATR (14): $${formatPrice(signalDetails.atr)}\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
+      const macroInfo = currentEma200 ? ` | EMA200 (الصورة الكبيرة): ${formatPrice(currentEma200)}` : '';
+      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج مع الصورة الكبيرة:**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- نوع الدخول: ${entryTypeArabic}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- سعر الدخول: ${formatPrice(currentClose)}\n- حجم اللوت المقترح: ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: ${posSize.actualRiskUSD.toFixed(2)} دولار)\n- وقف الخسارة SL (1.5x ATR): ${formatPrice(sl)}\n- الهدف TP (2.0x ATR): ${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): ${formatPrice(beTargetPrice)}\n- مؤشر ATR (14): ${formatPrice(signalDetails.atr)} نقطة\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: ${formatPrice(signalDetails.ema20)} | EMA100: ${formatPrice(signalDetails.ema100)}${macroInfo}`;
       await sendTelegramNotification(telegramMsg);
 
       return { symbol, signalTriggered: true, signal: signalDetails, groqAnalysis, groqValidation };

@@ -32,6 +32,7 @@ export function calculateScalpIndicators(candles: Candle[]): IndicatorResults | 
 
   const ema20 = EMA.calculate({ period: 20, values: closes });
   const ema100 = EMA.calculate({ period: 100, values: closes });
+  const ema200 = closes.length >= 200 ? EMA.calculate({ period: 200, values: closes }) : [];
   const rsi14 = RSI.calculate({ period: 14, values: closes });
   const atr14 = ATR.calculate({ period: 14, high: highs, low: lows, close: closes });
 
@@ -47,6 +48,7 @@ export function calculateScalpIndicators(candles: Candle[]): IndicatorResults | 
 
   const currentEma20 = ema20[ema20.length - 1];
   const currentEma100 = ema100[ema100.length - 1];
+  const currentEma200 = ema200.length > 0 ? ema200[ema200.length - 1] : undefined;
   const currentRsi = rsi14[rsi14.length - 1];
   const prevRsi = rsi14[rsi14.length - 2];
   const currentAtr = atr14[atr14.length - 1];
@@ -55,7 +57,7 @@ export function calculateScalpIndicators(candles: Candle[]): IndicatorResults | 
     closes,
     ema20,
     ema100,
-    ema200: ema100,
+    ema200: ema200.length > 0 ? ema200 : undefined,
     rsi14,
     atr14,
     currentClose,
@@ -64,7 +66,7 @@ export function calculateScalpIndicators(candles: Candle[]): IndicatorResults | 
     currentHigh,
     currentEma20,
     currentEma100,
-    currentEma200: currentEma100,
+    currentEma200,
     currentRsi,
     prevRsi,
     currentAtr,
