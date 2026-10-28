@@ -473,28 +473,26 @@ async function runScalperEngine() {
         return { symbol, signalTriggered: false, skipped: true, reason: msg };
       }
 
-      const { currentClose, currentEma20, currentEma100, currentRsi, prevRsi, currentAtr } = ind;
+      const { currentClose, currentLow, currentHigh, currentEma20, currentEma100, currentRsi, prevRsi, currentAtr } = ind;
 
-      // Trend-Filtered Dynamic Momentum Strategy Rules (September 9 Setup):
-      // Trend Direction Filter (The Shield):
-      // - BUY: currentClose > currentEma100 AND currentClose > currentEma20
-      // - SELL: currentClose < currentEma100 AND currentClose < currentEma20
-      // Healthy Momentum Zone (The Trigger - Crossover Event):
-      // - BUY: prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68
-      // - SELL: prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32
+      // Trend-Filtered Dynamic Momentum Strategy Rules:
+      // 1. Initial Crossover Trigger (RSI Level 50 Crossover in Trend):
+      const isBuyCrossover = currentClose > currentEma100 && currentClose > currentEma20 && prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68;
+      const isSellCrossover = currentClose < currentEma100 && currentClose < currentEma20 && prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32;
+
+      // 2. Trend Continuation Pullback / Retest to EMA20 Trigger:
+      const isBuyPullback = currentClose > currentEma100 && currentEma20 > currentEma100 && currentLow <= currentEma20 && currentClose >= currentEma20 && currentRsi >= 48 && currentRsi <= 68;
+      const isSellPullback = currentClose < currentEma100 && currentEma20 < currentEma100 && currentHigh >= currentEma20 && currentClose <= currentEma20 && currentRsi <= 52 && currentRsi >= 32;
 
       let signalType: 'BUY' | 'SELL' | null = null;
+      let triggerReason: 'CROSSOVER' | 'PULLBACK' | null = null;
 
-      const isBuyTrend = currentClose > currentEma100 && currentClose > currentEma20;
-      const isBuyMomentum = prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68;
-
-      const isSellTrend = currentClose < currentEma100 && currentClose < currentEma20;
-      const isSellMomentum = prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32;
-
-      if (isBuyTrend && isBuyMomentum) {
+      if (isBuyCrossover || isBuyPullback) {
         signalType = 'BUY';
-      } else if (isSellTrend && isSellMomentum) {
+        triggerReason = isBuyCrossover ? 'CROSSOVER' : 'PULLBACK';
+      } else if (isSellCrossover || isSellPullback) {
         signalType = 'SELL';
+        triggerReason = isSellCrossover ? 'CROSSOVER' : 'PULLBACK';
       }
 
       if (!signalType) {
@@ -545,12 +543,12 @@ async function runScalperEngine() {
         atr: currentAtr
       };
 
-      // 🤖 Groq AI Evaluation & Gatekeeper: تقييم وفحص جودة الإشارة بواسطة الذكاء الاصطناعي
+      // 🤖 Groq AI Advisory Evaluation: تقييم استشاري ذكي من Groq مع إرسال الصفقة دائماً
       const isMondayToday = new Date().getUTCDay() === 1;
       const groqValidation = await validateTradeConfluenceWithGroq({
         symbol,
         action: signalType,
-        triggerReason: 'CROSSOVER',
+        triggerReason: triggerReason || 'CROSSOVER',
         entryPrice: currentClose,
         sl,
         tp,
@@ -561,14 +559,7 @@ async function runScalperEngine() {
         isMonday: isMondayToday
       });
 
-      if (!groqValidation.approved) {
-        const rejectMsg = `🤖 [${symbol}] رفضت Groq AI الصفقة (تقييم: ${groqValidation.score}/10) | السبب: ${groqValidation.reason}`;
-        logs.push(rejectMsg);
-        console.log(rejectMsg);
-        return { symbol, signalTriggered: false, skipped: true, reason: rejectMsg, groqValidation };
-      }
-
-      logs.push(`✅ [${symbol}] وافقت Groq AI على الصفقة (تقييم: ${groqValidation.score}/10) | السبب: ${groqValidation.reason}`);
+      logs.push(`🤖 [${symbol}] تقييم Groq AI للصفقة: ${groqValidation.score}/10 | السبب: ${groqValidation.reason}`);
 
       // Generate Egyptian Arabic AI Alert via Groq
       const groqAnalysis = await generateGroqArabicAlert(signalDetails);
@@ -594,8 +585,12 @@ async function runScalperEngine() {
         ? currentClose + 0.5 * (tp - currentClose)
         : currentClose - 0.5 * (currentClose - tp);
 
+      const entryTypeArabic = triggerReason === 'PULLBACK'
+        ? '🎯 ارتداد وإعادة اختبار (EMA20 Pullback)'
+        : '⚡ تقاطع زخم مع الاتجاه (RSI Crossover)';
+
       // Send Telegram Alert
-      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum - استراتيجية 9 سبتمبر):**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- سعر الدخول: $${formatPrice(currentClose)}\n- حجم اللوت المقترح: ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: $${posSize.actualRiskUSD.toFixed(2)})\n- وقف الخسارة SL (1.5x ATR): $${formatPrice(sl)}\n- الهدف TP (2.0x ATR): $${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): **$${formatPrice(beTargetPrice)}**\n- مؤشر ATR (14): $${formatPrice(signalDetails.atr)}\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
+      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج (Trend-Filtered Dynamic Momentum):**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- نوع الدخول: ${entryTypeArabic}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- سعر الدخول: $${formatPrice(currentClose)}\n- حجم اللوت المقترح: ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: $${posSize.actualRiskUSD.toFixed(2)})\n- وقف الخسارة SL (1.5x ATR): $${formatPrice(sl)}\n- الهدف TP (2.0x ATR): $${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): **$${formatPrice(beTargetPrice)}**\n- مؤشر ATR (14): $${formatPrice(signalDetails.atr)}\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: $${formatPrice(signalDetails.ema20)} | EMA100: $${formatPrice(signalDetails.ema100)}`;
       await sendTelegramNotification(telegramMsg);
 
       return { symbol, signalTriggered: true, signal: signalDetails, groqAnalysis, groqValidation };
