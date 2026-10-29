@@ -262,7 +262,7 @@ async function runScalperEngine() {
 
             // هامش تفاوت فيد السحابة وبروكر MT5 (0.50 نقطة):
             const isGold = matchingItem.symbol.includes('XAU') || matchingItem.symbol.includes('GOLD');
-            const tpTolerance = isGold ? 0.50 : 0.0;
+            const tpTolerance = isGold ? 0.75 : 0.0; // هامش 0.75 نقطة: إذا اقترب السعر من الهدف بأقل من 0.75 نقطة يُعتبر الهدف تحقق بالكامل
 
             logs.push(`[Pending Trade ${trade.symbol}] Current: ${formatPrice(currentPrice)} | High: ${formatPrice(candleHigh)} (Max since entry: ${formatPrice(highestHighSinceEntry)}) | Low: ${formatPrice(candleLow)} (Min since entry: ${formatPrice(lowestLowSinceEntry)}) | TP: ${formatPrice(trade.tp)} | SL: ${formatPrice(trade.sl)}`);
             let newStatus: 'WIN' | 'LOSS' | 'BREAKEVEN' | null = null;
@@ -443,7 +443,7 @@ async function runScalperEngine() {
               const totalTargetPoints = Math.abs(trade.tp - trade.entryPrice);
               const isBuy = trade.action === 'BUY';
 
-              // أ. المستوى الأول (50% من الهدف): تأمين الدخول بربح بسيط لتصبح صفقة خالية من المخاطرة 100%
+              // أ. المستوى الأول (50% من مسار الهدف): تأمين الدخول بربح بسيط (+0.50 نقطة) لتصبح صفقة خالية من المخاطرة 100%
               if (!trade.breakevenApplied) {
                 const target50 = isBuy
                   ? trade.entryPrice + 0.5 * totalTargetPoints
@@ -469,34 +469,46 @@ async function runScalperEngine() {
                   console.log(breakevenMsg);
                   await sendTelegramNotification(breakevenMsg);
                 }
-              } else {
-                // ب. المستوى الثاني (80% من مسار الهدف): Breakeven كبير لحجز 60% من أرباح الهدف كاش
-                // تضمن خروج بربح كبير ممتاز في حال ارتداد السعر المفاجئ قبل ملامسة الهدف الكامل
-                const target80 = isBuy
-                  ? trade.entryPrice + 0.80 * totalTargetPoints
-                  : trade.entryPrice - 0.80 * totalTargetPoints;
+              }
 
-                const is80PercentReached = isBuy
-                  ? (highestHighSinceEntry >= target80 || currentPrice >= target80)
-                  : (lowestLowSinceEntry <= target80 || currentPrice <= target80);
+              // بعد تأمين الصفقة: تفعيل مستويات حجز الأرباح التدريجية لضمان عدم ضياع الأرباح عند الارتداد المفاجئ:
+              if (trade.breakevenApplied) {
+                const currentFloatingPoints = isBuy ? (highestHighSinceEntry - trade.entryPrice) : (trade.entryPrice - lowestLowSinceEntry);
+                const progressRatio = totalTargetPoints > 0 ? (currentFloatingPoints / totalTargetPoints) : 0;
+                let candidateSl: number | null = null;
+                let lockMsgType = '';
+                let lockedPoints = 0;
 
-                if (is80PercentReached) {
-                  const majorLockPoints = Number((totalTargetPoints * 0.60).toFixed(2));
-                  const candidateSl = isBuy
-                    ? Number((trade.entryPrice + majorLockPoints).toFixed(2))
-                    : Number((trade.entryPrice - majorLockPoints).toFixed(2));
+                // ب. المستوى الثالث (80% من مسار الهدف أو ربح >= 5.0 نقاط): Breakeven كبير لحجز 65% من أرباح الهدف كاش
+                if (progressRatio >= 0.80 || currentFloatingPoints >= 5.0) {
+                  lockedPoints = Number((totalTargetPoints * 0.65).toFixed(2));
+                  candidateSl = isBuy
+                    ? Number((trade.entryPrice + lockedPoints).toFixed(2))
+                    : Number((trade.entryPrice - lockedPoints).toFixed(2));
+                  lockMsgType = '🔒 تأمين أرباح كبير (Breakeven كبير 80%) 🎯';
+                }
+                // ج. المستوى الثاني (65% من مسار الهدف أو ربح >= 3.5 نقاط): حجز 40% من أرباح الهدف (أو 2.5 نقطة على الأقل) كاش
+                else if (progressRatio >= 0.65 || currentFloatingPoints >= 3.5) {
+                  lockedPoints = Math.max(2.50, Number((totalTargetPoints * 0.40).toFixed(2)));
+                  candidateSl = isBuy
+                    ? Number((trade.entryPrice + lockedPoints).toFixed(2))
+                    : Number((trade.entryPrice - lockedPoints).toFixed(2));
+                  lockMsgType = '🔒 تأمين أرباح متقدم (Tier 2 Profit Lock) 💵';
+                }
 
+                if (candidateSl !== null) {
                   const isImprovement = isBuy ? candidateSl > trade.sl : candidateSl < trade.sl;
                   if (isImprovement) {
                     trade.sl = candidateSl;
                     await trade.save();
 
                     const lotSize = trade.suggestedLotSize || 0.01;
-                    const approxCashUSD = (majorLockPoints * lotSize * (matchingItem.symbol.includes('XAU') ? 100 : 1)).toFixed(2);
-                    const majorLockMsg = `🔒 تأمين أرباح متقدم (Breakeven كبير 80%) 🎯\n- الأصل: ${trade.symbol}\n- وصول السعر إلى 80% من مسار الهدف!\n- تم رفع الوقف لحجز +${majorLockPoints} نقطة كاش (+${approxCashUSD}$ ربح مضمون 100%)!\n- الصفقة مستمرة بكامل حريتها لاقتناص الهدف الكامل 100% 🚀`;
-                    logs.push(majorLockMsg);
-                    console.log(majorLockMsg);
-                    await sendTelegramNotification(majorLockMsg);
+                    const approxCashUSD = (lockedPoints * lotSize * (matchingItem.symbol.includes('XAU') ? 100 : 1)).toFixed(2);
+                    const progressPct = (progressRatio * 100).toFixed(0);
+                    const lockMsg = `${lockMsgType}\n- الأصل: ${trade.symbol}\n- تقدمت الصفقة بنسبة ${progressPct}% (+ ${currentFloatingPoints.toFixed(2)} نقطة)!\n- تم رفع الوقف إلى ${formatPrice(candidateSl)} لحجز +${lockedPoints} نقطة كاش (+${approxCashUSD}$ ربح مضمون 100%)!\n- الصفقة مستمرة بكامل حريتها لاقتناص كامل الهدف 100% 🚀`;
+                    logs.push(lockMsg);
+                    console.log(lockMsg);
+                    await sendTelegramNotification(lockMsg);
                   }
                 }
               }
