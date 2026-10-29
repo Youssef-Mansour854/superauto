@@ -127,6 +127,45 @@ function isForexPair(symbol: string): boolean {
   return true;
 }
 
+async function fetchYahooGold5mCandles(): Promise<Candle[]> {
+  try {
+    const res = await axios.get('https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=5m&range=2d', {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      timeout: 6000
+    });
+    const result = res.data?.chart?.result?.[0];
+    if (!result) return [];
+    const timestamps = result.timestamp;
+    const quotes = result.indicators?.quote?.[0];
+    if (!Array.isArray(timestamps) || !quotes) return [];
+
+    const candles: Candle[] = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      const close = quotes.close?.[i];
+      if (close !== null && close !== undefined && !isNaN(close)) {
+        const timeMs = timestamps[i] * 1000;
+        const open = quotes.open?.[i] || close;
+        const high = quotes.high?.[i] || Math.max(open, close);
+        const low = quotes.low?.[i] || Math.min(open, close);
+        const volume = quotes.volume?.[i] || 0;
+        candles.push({
+          openTime: timeMs,
+          open,
+          high,
+          low,
+          close,
+          volume,
+          closeTime: timeMs + 300000
+        });
+      }
+    }
+    return candles.slice(-250);
+  } catch (err: any) {
+    console.warn('[Data Feed] Yahoo GC=F fetch failed:', err?.message || err);
+    return [];
+  }
+}
+
 async function fetchKraken5mKlines(): Promise<Candle[]> {
   try {
     const res = await axios.get('https://api.kraken.com/0/public/OHLC?pair=PAXGUSD&interval=5', { timeout: 6000 });
@@ -157,11 +196,11 @@ interface CandleFetchResponse {
 async function fetchAsset5mCandles(symbol: string, source: string): Promise<CandleFetchResponse> {
   const isGold = symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'PAXGUSDT';
 
-  // 1. Ultra-Fast US-Accessible Zero-Delay Feed for Gold (Kraken PAXG/USD - no geo-block on Vercel AWS, 300ms latency)
+  // 1. Primary Benchmark Feed for Gold: Global CME Spot Gold (GC=F - 100% MT5 Match, Zero Geo-Block on Vercel AWS)
   if (isGold) {
-    const krakenCandles = await fetchKraken5mKlines();
-    if (krakenCandles && krakenCandles.length >= 100) {
-      return { candles: krakenCandles, feedSource: 'KRAKEN (Real-Time Spot Gold)' };
+    const yahooGoldCandles = await fetchYahooGold5mCandles();
+    if (yahooGoldCandles && yahooGoldCandles.length >= 100) {
+      return { candles: yahooGoldCandles, feedSource: 'YAHOO_GOLD (Real Spot GC=F Benchmark)' };
     }
   }
 
@@ -178,19 +217,20 @@ async function fetchAsset5mCandles(symbol: string, source: string): Promise<Cand
     }
   }
 
-  // 3. Fallback: Yahoo Finance
-  if (source === 'YAHOO' || isGold || symbol === 'QQQ') {
-    const yahooCandles = await fetchYahoo5mKlines(symbol);
-    if (yahooCandles && yahooCandles.length > 0) {
-      return { candles: yahooCandles, feedSource: 'YAHOO_FINANCE' };
-    }
-  }
-
-  // 4. Fallback: Twelve Data
+  // 3. Fallback: Twelve Data
   const result = await fetchTwelveData5mKlines(symbol, '5min', 250);
   if (result?.candles && result.candles.length > 0) {
     return { candles: result.candles, feedSource: 'TWELVEDATA' };
   }
+
+  // 4. Fallback: Kraken (only if everything else fails)
+  if (isGold) {
+    const krakenCandles = await fetchKraken5mKlines();
+    if (krakenCandles && krakenCandles.length >= 100) {
+      return { candles: krakenCandles, feedSource: 'KRAKEN (Fallback)' };
+    }
+  }
+
   return { candles: [], feedSource: 'NONE' };
 }
 
