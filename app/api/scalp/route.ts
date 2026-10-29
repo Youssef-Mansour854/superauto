@@ -302,7 +302,8 @@ async function runScalperEngine() {
 
             // هامش تفاوت فيد السحابة وبروكر MT5 (0.50 نقطة):
             const isGold = matchingItem.symbol.includes('XAU') || matchingItem.symbol.includes('GOLD');
-            const tpTolerance = isGold ? 0.75 : 0.0; // هامش 0.75 نقطة: إذا اقترب السعر من الهدف بأقل من 0.75 نقطة يُعتبر الهدف تحقق بالكامل
+            // الهدف يجب أن يُلمس فعلياً بالكامل لمطابقة أوامر Limit في MT5 بدون أي أهداف وهمية:
+            const tpTolerance = 0.0;
 
             logs.push(`[Pending Trade ${trade.symbol}] Current: ${formatPrice(currentPrice)} | High: ${formatPrice(candleHigh)} (Max since entry: ${formatPrice(highestHighSinceEntry)}) | Low: ${formatPrice(candleLow)} (Min since entry: ${formatPrice(lowestLowSinceEntry)}) | TP: ${formatPrice(trade.tp)} | SL: ${formatPrice(trade.sl)}`);
             let newStatus: 'WIN' | 'LOSS' | 'BREAKEVEN' | null = null;
