@@ -241,17 +241,36 @@ async function runScalperEngine() {
           }
 
           if (candles && candles.length > 0) {
+            const entryTimeMs = trade.timestamp ? new Date(trade.timestamp).getTime() : 0;
+
+            // 1. فحص جميع الشموع التي تكونت منذ لحظة فتح الصفقة وحتى الآن (وليس فقط آخر شمعة!)
+            // لضمان عدم تفويت أي ذيل لمس الهدف في أي دقيقة سابقة
+            const candlesSinceEntry = candles.filter(c => {
+              const candleCloseTime = c.closeTime || (c.openTime + 300000);
+              return candleCloseTime >= (entryTimeMs - 60000);
+            });
+            const evalCandles = candlesSinceEntry.length > 0 ? candlesSinceEntry : [candles[candles.length - 1]];
+
             const currentCandle = candles[candles.length - 1];
             const currentPrice = currentCandle.close;
             const candleHigh = currentCandle.high !== undefined ? currentCandle.high : currentPrice;
             const candleLow = currentCandle.low !== undefined ? currentCandle.low : currentPrice;
-            logs.push(`[Pending Trade ${trade.symbol}] Current: ${formatPrice(currentPrice)} | High: ${formatPrice(candleHigh)} | Low: ${formatPrice(candleLow)} | TP: ${formatPrice(trade.tp)} | SL: ${formatPrice(trade.sl)}`);
+
+            // أعلى وأدنى سعر سُجل في أي لحظة عبر جميع الشموع منذ فتح الصفقة:
+            const highestHighSinceEntry = Math.max(...evalCandles.map(c => c.high !== undefined ? c.high : c.close));
+            const lowestLowSinceEntry = Math.min(...evalCandles.map(c => c.low !== undefined ? c.low : c.close));
+
+            // هامش تفاوت فيد السحابة وبروكر MT5 (0.50 نقطة):
+            const isGold = matchingItem.symbol.includes('XAU') || matchingItem.symbol.includes('GOLD');
+            const tpTolerance = isGold ? 0.50 : 0.0;
+
+            logs.push(`[Pending Trade ${trade.symbol}] Current: ${formatPrice(currentPrice)} | High: ${formatPrice(candleHigh)} (Max since entry: ${formatPrice(highestHighSinceEntry)}) | Low: ${formatPrice(candleLow)} (Min since entry: ${formatPrice(lowestLowSinceEntry)}) | TP: ${formatPrice(trade.tp)} | SL: ${formatPrice(trade.sl)}`);
             let newStatus: 'WIN' | 'LOSS' | 'BREAKEVEN' | null = null;
             let exitPrice = currentPrice;
 
-            // HYBRID SAFETY NET LOGIC (Baseline Strategy):
-            // 1. Take Profit (Wick on High/Low): target reached (2.0x ATR)
-            // 2. Breakeven Stop: if breakeven applied, triggers at trade.sl (+0.50pt profit buffer)
+            // HYBRID SAFETY NET LOGIC (Enhanced Baseline Strategy):
+            // 1. Take Profit (Wick on High/Low across ALL candles since entry + Tolerance)
+            // 2. Breakeven Stop: if breakeven/profit lock applied, triggers at trade.sl
             // 3. Soft Stop (1.5x ATR): triggers ONLY on candle CLOSE before breakeven
             // 4. Hard Catastrophic Stop (3.0x ATR): triggers on candle wick to protect against flash crashes
             const isQQQ = matchingItem.symbol.includes('QQQ') || matchingItem.symbol.includes('IXIC');
@@ -259,13 +278,14 @@ async function runScalperEngine() {
             const atrVal = trade.atr || (Math.abs(trade.sl - trade.entryPrice) / 1.5);
 
             if (trade.action === 'BUY') {
-              const tpHit = candleHigh >= trade.tp;
+              // فحص لمس الهدف عبر جميع الشموع منذ الدخول مع هامش التفاوت
+              const tpHit = (highestHighSinceEntry + tpTolerance) >= trade.tp;
 
               if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
               } else if (trade.breakevenApplied) {
-                // إذا تم تأمين الصفقة بربح بسيط: يخرج عند لمس الوقف المؤمن trade.sl
+                // إذا تم تأمين الصفقة (بريك إيفن بسيط أو كبير): يخرج عند لمس الوقف المؤمن trade.sl
                 const beSlHit = candleLow <= trade.sl || currentPrice <= trade.sl;
                 if (beSlHit) {
                   newStatus = 'BREAKEVEN';
@@ -286,13 +306,14 @@ async function runScalperEngine() {
                 }
               }
             } else if (trade.action === 'SELL') {
-              const tpHit = candleLow <= trade.tp;
+              // فحص لمس الهدف عبر جميع الشموع منذ الدخول مع هامش التفاوت
+              const tpHit = (lowestLowSinceEntry - tpTolerance) <= trade.tp;
 
               if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
               } else if (trade.breakevenApplied) {
-                // إذا تم تأمين الصفقة بربح بسيط: يخرج عند لمس الوقف المؤمن trade.sl
+                // إذا تم تأمين الصفقة (بريك إيفن بسيط أو كبير): يخرج عند لمس الوقف المؤمن trade.sl
                 const beSlHit = candleHigh >= trade.sl || currentPrice >= trade.sl;
                 if (beSlHit) {
                   newStatus = 'BREAKEVEN';
@@ -380,7 +401,9 @@ async function runScalperEngine() {
                 outcomeText = `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: ${formatPrice(exitPrice)}\nالربح المحقق: +${pnlPoints.toFixed(2)} نقطة (+${detailed.netPnLUSD.toFixed(2)} دولار)\nرصيد الحساب الجديد: ${accountUpdate.newBalance.toFixed(2)} دولار`;
               } else if (newStatus === 'BREAKEVEN') {
                 const pnlSign = detailed.netPnLUSD >= 0 ? '+' : '';
-                outcomeText = `🛡 **إغلاق على تأمين الدخول بربح بسيط (BREAKEVEN)!** ⚖️\nالرمز: ${trade.symbol}\nسعر الخروج: ${formatPrice(exitPrice)}\nالنتيجة: ربح بسيط +${pnlPoints.toFixed(2)} نقطة (${pnlSign}${detailed.netPnLUSD.toFixed(2)} دولار صافي بعد السبريد)\nرصيد الحساب: ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                const isBigBe = pnlPoints >= 1.5;
+                const beTitle = isBigBe ? '🔒 **إغلاق بتأمين أرباح متقدم (Breakeven كبير)!** 💵' : '🛡 **إغلاق على تأمين الدخول (BREAKEVEN)!** ⚖️';
+                outcomeText = `${beTitle}\nالرمز: ${trade.symbol}\nسعر الخروج: ${formatPrice(exitPrice)}\nالربح المحقق: +${pnlPoints.toFixed(2)} نقطة (${pnlSign}${detailed.netPnLUSD.toFixed(2)} دولار صافي بعد السبريد)\nرصيد الحساب: ${accountUpdate.newBalance.toFixed(2)} دولار`;
               } else {
                 outcomeText = `📉 **ضرب وقف الخسارة! (LOSS)** 🛡\nالرمز: ${trade.symbol}\nسعر الخروج: ${formatPrice(exitPrice)}\nالخسارة: ${pnlPoints.toFixed(2)} نقطة (${detailed.netPnLUSD.toFixed(2)} دولار)\nرصيد الحساب: ${accountUpdate.newBalance.toFixed(2)} دولار`;
               }
@@ -416,22 +439,23 @@ async function runScalperEngine() {
               // Trade Management: Enhanced Breakeven & Smart Time Stop (Baseline Strategy)
               // -------------------------------------------------------------
 
-              // 1. Enhanced Breakeven Activation:
-              // عند وصول السعر إلى 50% من المسار نحو الهدف ➔ نقل الوقف لحجز ربح بسيط وتغطية السبريد (+0.50 نقطة للذهب)
-              // بدون خروج مبكر أو متسرع، مع إتاحة المجال الكامل للصفقة للوصول للهدف الكامل!
+              // 1. Enhanced Breakeven Activation (50% Target) & Major Profit Lock (80% Target):
+              const totalTargetPoints = Math.abs(trade.tp - trade.entryPrice);
+              const isBuy = trade.action === 'BUY';
+
+              // أ. المستوى الأول (50% من الهدف): تأمين الدخول بربح بسيط لتصبح صفقة خالية من المخاطرة 100%
               if (!trade.breakevenApplied) {
-                const isBuy = trade.action === 'BUY';
                 const target50 = isBuy
-                  ? trade.entryPrice + 0.5 * (trade.tp - trade.entryPrice)
-                  : trade.entryPrice - 0.5 * (trade.entryPrice - trade.tp);
+                  ? trade.entryPrice + 0.5 * totalTargetPoints
+                  : trade.entryPrice - 0.5 * totalTargetPoints;
 
                 const is50PercentReached = isBuy
-                  ? (candleHigh >= target50 || currentPrice >= target50)
-                  : (candleLow <= target50 || currentPrice <= target50);
+                  ? (highestHighSinceEntry >= target50 || currentPrice >= target50)
+                  : (lowestLowSinceEntry <= target50 || currentPrice <= target50);
 
                 if (is50PercentReached) {
                   const isGold = matchingItem.symbol.includes('XAU') || matchingItem.symbol.includes('GOLD');
-                  const beBuffer = isGold ? 0.50 : 0.0; // نصف نقطة ربح كاش لتغطية السبريد وحجز ربح بسيط
+                  const beBuffer = isGold ? 0.50 : 0.0;
                   const newSl = isBuy
                     ? Number((trade.entryPrice + beBuffer).toFixed(2))
                     : Number((trade.entryPrice - beBuffer).toFixed(2));
@@ -444,6 +468,36 @@ async function runScalperEngine() {
                   logs.push(breakevenMsg);
                   console.log(breakevenMsg);
                   await sendTelegramNotification(breakevenMsg);
+                }
+              } else {
+                // ب. المستوى الثاني (80% من مسار الهدف): Breakeven كبير لحجز 60% من أرباح الهدف كاش
+                // تضمن خروج بربح كبير ممتاز في حال ارتداد السعر المفاجئ قبل ملامسة الهدف الكامل
+                const target80 = isBuy
+                  ? trade.entryPrice + 0.80 * totalTargetPoints
+                  : trade.entryPrice - 0.80 * totalTargetPoints;
+
+                const is80PercentReached = isBuy
+                  ? (highestHighSinceEntry >= target80 || currentPrice >= target80)
+                  : (lowestLowSinceEntry <= target80 || currentPrice <= target80);
+
+                if (is80PercentReached) {
+                  const majorLockPoints = Number((totalTargetPoints * 0.60).toFixed(2));
+                  const candidateSl = isBuy
+                    ? Number((trade.entryPrice + majorLockPoints).toFixed(2))
+                    : Number((trade.entryPrice - majorLockPoints).toFixed(2));
+
+                  const isImprovement = isBuy ? candidateSl > trade.sl : candidateSl < trade.sl;
+                  if (isImprovement) {
+                    trade.sl = candidateSl;
+                    await trade.save();
+
+                    const lotSize = trade.suggestedLotSize || 0.01;
+                    const approxCashUSD = (majorLockPoints * lotSize * (matchingItem.symbol.includes('XAU') ? 100 : 1)).toFixed(2);
+                    const majorLockMsg = `🔒 تأمين أرباح متقدم (Breakeven كبير 80%) 🎯\n- الأصل: ${trade.symbol}\n- وصول السعر إلى 80% من مسار الهدف!\n- تم رفع الوقف لحجز +${majorLockPoints} نقطة كاش (+${approxCashUSD}$ ربح مضمون 100%)!\n- الصفقة مستمرة بكامل حريتها لاقتناص الهدف الكامل 100% 🚀`;
+                    logs.push(majorLockMsg);
+                    console.log(majorLockMsg);
+                    await sendTelegramNotification(majorLockMsg);
+                  }
                 }
               }
 
@@ -662,6 +716,15 @@ async function runScalperEngine() {
         getLiveRiskPercent(),
         spec.contractSize
       );
+
+      // 🛡️ فحص سقف المخاطرة الأقصى (Max Risk Cap $7.00):
+      // حماية الحساب من قفزات الـ ATR العنيفة وقت الأخبار (لمنع خسائر 13$)
+      if (posSize.exceedsMaxRiskCap) {
+        const capMsg = `[${symbol}] 🚨 تجاوز سقف المخاطرة الأقصى (${posSize.actualRiskUSD.toFixed(2)} > $7.00) بسبب اتساع الـ ATR (${currentAtr.toFixed(2)} نقطة) وقت التقلبات العنيفة. تم إلغاء الإشارة تلقائياً لحماية رأس المال.`;
+        logs.push(capMsg);
+        console.warn(capMsg);
+        return { symbol, signalTriggered: false, skipped: true, reason: capMsg };
+      }
 
       const signalDetails = {
         symbol,
