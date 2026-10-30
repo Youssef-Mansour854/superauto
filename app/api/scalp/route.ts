@@ -30,7 +30,7 @@ export interface ScalpWatchlistItem {
 
 // Watchlist symbols for 5-minute High-Frequency Scalper Engine (September 9 Strategy)
 export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
-  { symbol: 'XAU/USD', source: 'BINANCE', enabled: true },
+  { symbol: 'XAU/USD', source: 'KRAKEN', enabled: true },
   {
     symbol: 'EUR/USD',
     source: 'TWELVEDATA',
@@ -52,8 +52,8 @@ export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
 ];
 
 function normalizeSymbol(symbol: string): { symbol: string; source: string } {
-  if (symbol === 'XAUUSD=X' || symbol === 'XAUUSD' || symbol === 'XAU/USD') {
-    return { symbol: 'XAU/USD', source: 'BINANCE' };
+  if (symbol === 'XAUUSD=X' || symbol === 'XAUUSD' || symbol === 'XAU/USD' || symbol === 'GOLD') {
+    return { symbol: 'XAU/USD', source: 'KRAKEN' };
   }
   if (symbol === 'EURUSD=X' || symbol === 'EURUSD' || symbol === 'EUR/USD') {
     return { symbol: 'EUR/USD', source: 'TWELVEDATA' };
@@ -166,6 +166,25 @@ async function fetchYahooGold5mCandles(): Promise<Candle[]> {
   }
 }
 
+async function fetchBitfinex5mKlines(): Promise<Candle[]> {
+  try {
+    const res = await axios.get('https://api-pub.bitfinex.com/v2/candles/trade:5m:tXAUT:USD/hist?limit=250', { timeout: 6000 });
+    if (!Array.isArray(res.data) || res.data.length < 50) return [];
+    return res.data.slice().reverse().map((c: any[]) => ({
+      openTime: c[0],
+      open: c[1],
+      close: c[2],
+      high: c[3],
+      low: c[4],
+      volume: c[5] || 0,
+      closeTime: c[0] + 300000
+    }));
+  } catch (err: any) {
+    console.warn('[Data Feed] Bitfinex fetch failed:', err?.message || err);
+    return [];
+  }
+}
+
 async function fetchKraken5mKlines(): Promise<Candle[]> {
   try {
     const res = await axios.get('https://api.kraken.com/0/public/OHLC?pair=PAXGUSD&interval=5', { timeout: 6000 });
@@ -194,17 +213,23 @@ interface CandleFetchResponse {
 }
 
 async function fetchAsset5mCandles(symbol: string, source: string): Promise<CandleFetchResponse> {
-  const isGold = symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'PAXGUSDT';
+  const isGold = symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'PAXGUSDT' || symbol === 'PAXGUSD';
 
-  // 1. Primary Benchmark Feed for Gold: Global CME Spot Gold (GC=F - 100% MT5 Match, Zero Geo-Block on Vercel AWS)
+  // 1. Primary Benchmark Feed for Gold: Spot Cash Gold via Kraken (PAXG/USD - 1:1 Physical Gold USD Cash, exact match with XM / MT5 Spot Gold)
   if (isGold) {
-    const yahooGoldCandles = await fetchYahooGold5mCandles();
-    if (yahooGoldCandles && yahooGoldCandles.length >= 100) {
-      return { candles: yahooGoldCandles, feedSource: 'YAHOO_GOLD (Real Spot GC=F Benchmark)' };
+    const krakenCandles = await fetchKraken5mKlines();
+    if (krakenCandles && krakenCandles.length >= 100) {
+      return { candles: krakenCandles, feedSource: 'KRAKEN (Spot Cash Gold PAXG/USD - XM/MT5 Match)' };
+    }
+
+    // 2. Secondary Spot Gold Feed: Bitfinex (XAUT/USD Tether Gold Spot Cash)
+    const bitfinexCandles = await fetchBitfinex5mKlines();
+    if (bitfinexCandles && bitfinexCandles.length >= 100) {
+      return { candles: bitfinexCandles, feedSource: 'BITFINEX (Spot Cash Gold XAUT/USD)' };
     }
   }
 
-  // 2. High-speed Binance Feed
+  // 3. High-speed Binance Feed
   if (source === 'BINANCE' || isGold) {
     try {
       const binanceSymbol = isGold ? 'PAXGUSDT' : symbol;
@@ -217,17 +242,17 @@ async function fetchAsset5mCandles(symbol: string, source: string): Promise<Cand
     }
   }
 
-  // 3. Fallback: Twelve Data
+  // 4. Fallback: Twelve Data
   const result = await fetchTwelveData5mKlines(symbol, '5min', 250);
   if (result?.candles && result.candles.length > 0) {
     return { candles: result.candles, feedSource: 'TWELVEDATA' };
   }
 
-  // 4. Fallback: Kraken (only if everything else fails)
+  // 5. Emergency Last Resort for Gold: Yahoo GC=F (Note: Futures contract with contango basis)
   if (isGold) {
-    const krakenCandles = await fetchKraken5mKlines();
-    if (krakenCandles && krakenCandles.length >= 100) {
-      return { candles: krakenCandles, feedSource: 'KRAKEN (Fallback)' };
+    const yahooGoldCandles = await fetchYahooGold5mCandles();
+    if (yahooGoldCandles && yahooGoldCandles.length >= 100) {
+      return { candles: yahooGoldCandles, feedSource: 'YAHOO_GOLD_FUTURES (Emergency Last Resort)' };
     }
   }
 
