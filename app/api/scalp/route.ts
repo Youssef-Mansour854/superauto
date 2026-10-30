@@ -30,7 +30,7 @@ export interface ScalpWatchlistItem {
 
 // Watchlist symbols for 5-minute High-Frequency Scalper Engine (September 9 Strategy)
 export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
-  { symbol: 'XAU/USD', source: 'KRAKEN', enabled: true },
+  { symbol: 'XAU/USD', source: 'TWELVEDATA', enabled: true },
   {
     symbol: 'EUR/USD',
     source: 'TWELVEDATA',
@@ -53,7 +53,7 @@ export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
 
 function normalizeSymbol(symbol: string): { symbol: string; source: string } {
   if (symbol === 'XAUUSD=X' || symbol === 'XAUUSD' || symbol === 'XAU/USD' || symbol === 'GOLD') {
-    return { symbol: 'XAU/USD', source: 'KRAKEN' };
+    return { symbol: 'XAU/USD', source: 'TWELVEDATA' };
   }
   if (symbol === 'EURUSD=X' || symbol === 'EURUSD' || symbol === 'EUR/USD') {
     return { symbol: 'EUR/USD', source: 'TWELVEDATA' };
@@ -215,21 +215,30 @@ interface CandleFetchResponse {
 async function fetchAsset5mCandles(symbol: string, source: string): Promise<CandleFetchResponse> {
   const isGold = symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'PAXGUSDT' || symbol === 'PAXGUSD';
 
-  // 1. Primary Benchmark Feed for Gold: Spot Cash Gold via Kraken (PAXG/USD - 1:1 Physical Gold USD Cash, exact match with XM / MT5 Spot Gold)
+  // 1. Primary Benchmark Feed for Gold: Real Interbank Spot Gold via Twelve Data (100% Institutional Match)
+  if (isGold || source === 'TWELVEDATA') {
+    const tdSymbol = isGold ? 'XAU/USD' : symbol;
+    const result = await fetchTwelveData5mKlines(tdSymbol, '5min', 250);
+    if (result?.candles && result.candles.length >= 100) {
+      return { candles: result.candles, feedSource: 'TWELVEDATA (Interbank Spot XAU/USD Benchmark)' };
+    }
+  }
+
+  // 2. Secondary Spot Gold Feed: Kraken (Spot Cash Gold PAXG/USD)
   if (isGold) {
     const krakenCandles = await fetchKraken5mKlines();
     if (krakenCandles && krakenCandles.length >= 100) {
-      return { candles: krakenCandles, feedSource: 'KRAKEN (Spot Cash Gold PAXG/USD - XM/MT5 Match)' };
+      return { candles: krakenCandles, feedSource: 'KRAKEN (Spot Cash Gold PAXG/USD)' };
     }
 
-    // 2. Secondary Spot Gold Feed: Bitfinex (XAUT/USD Tether Gold Spot Cash)
+    // 3. Tertiary Spot Gold Feed: Bitfinex (XAUT/USD Tether Gold Spot Cash)
     const bitfinexCandles = await fetchBitfinex5mKlines();
     if (bitfinexCandles && bitfinexCandles.length >= 100) {
       return { candles: bitfinexCandles, feedSource: 'BITFINEX (Spot Cash Gold XAUT/USD)' };
     }
   }
 
-  // 3. High-speed Binance Feed
+  // 4. High-speed Binance Feed
   if (source === 'BINANCE' || isGold) {
     try {
       const binanceSymbol = isGold ? 'PAXGUSDT' : symbol;
@@ -239,20 +248,6 @@ async function fetchAsset5mCandles(symbol: string, source: string): Promise<Cand
       }
     } catch (binanceErr: any) {
       console.warn(`[Data Feed] Binance fetch failed for ${symbol}: ${binanceErr?.message || binanceErr}`);
-    }
-  }
-
-  // 4. Fallback: Twelve Data
-  const result = await fetchTwelveData5mKlines(symbol, '5min', 250);
-  if (result?.candles && result.candles.length > 0) {
-    return { candles: result.candles, feedSource: 'TWELVEDATA' };
-  }
-
-  // 5. Emergency Last Resort for Gold: Yahoo GC=F (Note: Futures contract with contango basis)
-  if (isGold) {
-    const yahooGoldCandles = await fetchYahooGold5mCandles();
-    if (yahooGoldCandles && yahooGoldCandles.length >= 100) {
-      return { candles: yahooGoldCandles, feedSource: 'YAHOO_GOLD_FUTURES (Emergency Last Resort)' };
     }
   }
 

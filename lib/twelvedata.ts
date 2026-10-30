@@ -31,7 +31,7 @@ export async function fetchTwelveData5mKlines(
   outputsize: number = 100
 ): Promise<CandleFetchResult> {
   const apiSymbol = normalizeTwelveDataSymbol(symbol);
-  const apiKey = process.env.TWELVEDATA_API_KEY || '';
+  const apiKey = process.env.TWELVEDATA_API_KEY || '29d676f8d5874b54bc16c98f1698e528';
   const url = `https://api.twelvedata.com/time_series`;
 
   try {
@@ -142,7 +142,7 @@ export async function fetchTwelveDataBatch5mKlines(
   symbols.forEach((s) => (result[s] = []));
 
   try {
-    const apiKey = process.env.TWELVEDATA_API_KEY || '';
+    const apiKey = process.env.TWELVEDATA_API_KEY || '29d676f8d5874b54bc16c98f1698e528';
     const url = `https://api.twelvedata.com/time_series`;
 
     const response = await axios.get(url, {
