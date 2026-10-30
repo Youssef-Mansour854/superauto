@@ -30,7 +30,7 @@ export interface ScalpWatchlistItem {
 
 // Watchlist symbols for 5-minute High-Frequency Scalper Engine (September 9 Strategy)
 export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
-  { symbol: 'XAU/USD', source: 'KRAKEN', enabled: true },
+  { symbol: 'XAU/USD', source: 'TWELVEDATA', enabled: true },
   {
     symbol: 'EUR/USD',
     source: 'TWELVEDATA',
@@ -53,7 +53,7 @@ export const SCALP_WATCHLIST: ScalpWatchlistItem[] = [
 
 function normalizeSymbol(symbol: string): { symbol: string; source: string } {
   if (symbol === 'XAUUSD=X' || symbol === 'XAUUSD' || symbol === 'XAU/USD' || symbol === 'GOLD') {
-    return { symbol: 'XAU/USD', source: 'KRAKEN' };
+    return { symbol: 'XAU/USD', source: 'TWELVEDATA' };
   }
   if (symbol === 'EURUSD=X' || symbol === 'EURUSD' || symbol === 'EUR/USD') {
     return { symbol: 'EUR/USD', source: 'TWELVEDATA' };
@@ -215,25 +215,23 @@ interface CandleFetchResponse {
 async function fetchAsset5mCandles(symbol: string, source: string): Promise<CandleFetchResponse> {
   const isGold = symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'PAXGUSDT' || symbol === 'PAXGUSD';
 
-  // 1. Primary Benchmark Feed for Gold: Kraken (Spot Cash Gold PAXG/USD - Real-time Ultra Low Latency, XM/MT5 Match)
-  if (isGold || source === 'KRAKEN') {
-    const krakenCandles = await fetchKraken5mKlines();
-    if (krakenCandles && krakenCandles.length >= 100) {
-      return { candles: krakenCandles, feedSource: 'KRAKEN (Spot Cash Gold PAXG/USD - XM/MT5 Real-time Match)' };
-    }
-  }
-
-  // 2. Secondary Spot Gold Feed: Twelve Data (Interbank Spot XAU/USD Benchmark)
+  // 1. Primary Benchmark Feed for Gold: Real Interbank Spot Gold via Twelve Data (100% Broker/XM Match)
   if (isGold || source === 'TWELVEDATA') {
     const tdSymbol = isGold ? 'XAU/USD' : symbol;
     const result = await fetchTwelveData5mKlines(tdSymbol, '5min', 250);
     if (result?.candles && result.candles.length >= 100) {
-      return { candles: result.candles, feedSource: 'TWELVEDATA (Interbank Spot XAU/USD Benchmark)' };
+      return { candles: result.candles, feedSource: 'TWELVEDATA (Interbank Spot XAU/USD Benchmark - XM Match)' };
     }
   }
 
-  // 3. Tertiary Spot Gold Feed: Bitfinex (XAUT/USD Tether Gold Spot Cash)
+  // 2. Secondary Spot Gold Feed: Kraken (Spot Cash Gold PAXG/USD)
   if (isGold) {
+    const krakenCandles = await fetchKraken5mKlines();
+    if (krakenCandles && krakenCandles.length >= 100) {
+      return { candles: krakenCandles, feedSource: 'KRAKEN (Spot Cash Gold PAXG/USD)' };
+    }
+
+    // 3. Tertiary Spot Gold Feed: Bitfinex (XAUT/USD Tether Gold Spot Cash)
     const bitfinexCandles = await fetchBitfinex5mKlines();
     if (bitfinexCandles && bitfinexCandles.length >= 100) {
       return { candles: bitfinexCandles, feedSource: 'BITFINEX (Spot Cash Gold XAUT/USD)' };
