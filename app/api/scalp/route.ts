@@ -1,13 +1,11 @@
 import { NextResponse } from 'next/server';
-import axios from 'axios';
 import { connectToDatabase } from '@/lib/mongodb';
 import Trade from '@/models/Trade';
 import TradeHistory from '@/models/TradeHistory';
-import { fetchBinanceKlines, Candle } from '@/lib/binance';
+import type { Candle } from '@/lib/binance';
 import { fetchTwelveData5mKlines } from '@/lib/twelvedata';
-import { fetchYahoo5mKlines } from '@/lib/yfinance';
 import { calculateScalpIndicators, formatPrice } from '@/lib/indicators';
-import { generateGroqArabicAlert, validateTradeConfluenceWithGroq } from '@/lib/groq';
+import { validateTradeConfluenceWithGroq } from '@/lib/groq';
 import { sendTelegramNotification } from '@/lib/telegram';
 import {
   calculatePositionSize,
@@ -15,6 +13,9 @@ import {
   getLiveAccountBalance,
   getLiveRiskPercent,
   getSymbolSpec,
+  getMaxDailyLossUSD,
+  getMaxConsecutiveLosses,
+  getCoolDownMinutes,
 } from '@/config/accountConfig';
 import { getLiveAccountState, applyTradeResultToAccount } from '@/lib/account';
 
@@ -68,143 +69,118 @@ function normalizeSymbol(symbol: string): { symbol: string; source: string } {
   return matching ? { symbol: matching.symbol, source: matching.source } : { symbol, source: 'TWELVEDATA' };
 }
 
-// Per-symbol Session Filter (Africa/Cairo Time)
-interface SessionFilterConfig {
-  enabled: boolean;
-  startHourCairo: number;
-  endHourCairo: number;
+// XAU/USD is OTC and has no single global exchange calendar. Use the main
+// 100-oz COMEX gold futures session as a conservative global-market reference:
+// Sun 18:00–Fri 17:00 New York time, with the daily 17:00–18:00 break.
+// Freshness checks also reject stale data during holidays and unscheduled stops.
+const GOLD_MARKET_TIME_ZONE = 'America/New_York';
+const DISPLAY_TIME_ZONE = 'Africa/Cairo';
+const MAX_CLOSED_CANDLE_AGE_MS = 7 * 60 * 1000;
+const MAX_ENTRY_SIGNAL_AGE_MS = 60 * 1000;
+const ENTRY_SIGNAL_VALIDITY_MS = 90 * 1000;
+
+function isGoldSymbol(symbol: string): boolean {
+  const norm = (symbol || '').toUpperCase();
+  return norm.includes('XAU') || norm.includes('GOLD');
 }
 
-const SESSION_FILTERS: Record<string, SessionFilterConfig> = {
-  'EUR/USD': { enabled: true, startHourCairo: 0, endHourCairo: 8 },  // Block Asian session 00:00 - 08:00 Cairo
-  'XAU/USD': { enabled: false, startHourCairo: 0, endHourCairo: 24 }, // 24h baseline for Gold
-  'QQQ': { enabled: false, startHourCairo: 16.5, endHourCairo: 23.0 }  // Active for QQQ
-};
+function isGoldMarketOpen(date: Date): boolean {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: GOLD_MARKET_TIME_ZONE,
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23'
+    }).formatToParts(date);
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    const minuteOfDay = Number(values.hour) * 60 + Number(values.minute);
+    if (!Number.isFinite(minuteOfDay)) return false;
+
+    if (values.weekday === 'Sun') return minuteOfDay >= 18 * 60;
+    if (['Mon', 'Tue', 'Wed', 'Thu'].includes(values.weekday)) {
+      return minuteOfDay < 17 * 60 || minuteOfDay >= 18 * 60;
+    }
+    if (values.weekday === 'Fri') return minuteOfDay < 17 * 60;
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 function isSessionAllowed(symbol: string, date: Date = new Date()): boolean {
   const norm = normalizeSymbol(symbol).symbol;
-  const filter = SESSION_FILTERS[norm];
-  if (!filter || !filter.enabled) return true;
-
-  const utcHours = date.getUTCHours();
-  const utcMinutes = date.getUTCMinutes();
-  const cairoDecimalHour = ((utcHours + 3) % 24) + (utcMinutes / 60);
+  if (isGoldSymbol(norm)) {
+    return isGoldMarketOpen(date);
+  }
 
   if (norm === 'EUR/USD') {
-    // BLOCK_BETWEEN 00:00 and 08:00
-    return !(cairoDecimalHour >= filter.startHourCairo && cairoDecimalHour < filter.endHourCairo);
-  }
-  // ALLOW_BETWEEN
-  return cairoDecimalHour >= filter.startHourCairo && cairoDecimalHour < filter.endHourCairo;
-}
-
-function isCryptoPair(symbol: string): boolean {
-  const norm = (symbol || '').toUpperCase();
-  return norm.includes('BTC') || norm.includes('ETH') || norm.includes('SOL');
-}
-
-function isMarketWeekend(symbol: string, date: Date = new Date()): boolean {
-  const utcDay = date.getUTCDay();
-  // Saturday (6) or Sunday (0)
-  if (utcDay !== 0 && utcDay !== 6) return false;
-  // Crypto trades 24/7/365, never restricted on weekends
-  if (isCryptoPair(symbol)) return false;
-  // Forex, Metals, Indices are closed on weekends
-  return true;
-}
-
-function isForexPair(symbol: string): boolean {
-  const norm = symbol.toUpperCase();
-  if (norm.includes('XAU') || norm.includes('XAG') || norm.includes('GOLD')) {
-    return false;
-  }
-  if (norm.startsWith('^') || norm.includes('IXIC') || norm.includes('US30') || norm.includes('SPX') || norm.includes('NAS') || norm.includes('NDX') || norm.includes('GER') || norm.includes('DAX')) {
-    return false;
-  }
-  if (norm.includes('BTC') || norm.includes('ETH') || norm.includes('SOL')) {
-    return false;
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    }).formatToParts(date);
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    const cairoDecimalHour = Number(values.hour) + Number(values.minute) / 60;
+    return cairoDecimalHour >= 8;
   }
   return true;
 }
 
-async function fetchYahooGold5mCandles(): Promise<Candle[]> {
-  try {
-    const res = await axios.get('https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=5m&range=2d', {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      timeout: 6000
-    });
-    const result = res.data?.chart?.result?.[0];
-    if (!result) return [];
-    const timestamps = result.timestamp;
-    const quotes = result.indicators?.quote?.[0];
-    if (!Array.isArray(timestamps) || !quotes) return [];
-
-    const candles: Candle[] = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      const close = quotes.close?.[i];
-      if (close !== null && close !== undefined && !isNaN(close)) {
-        const timeMs = timestamps[i] * 1000;
-        const open = quotes.open?.[i] || close;
-        const high = quotes.high?.[i] || Math.max(open, close);
-        const low = quotes.low?.[i] || Math.min(open, close);
-        const volume = quotes.volume?.[i] || 0;
-        candles.push({
-          openTime: timeMs,
-          open,
-          high,
-          low,
-          close,
-          volume,
-          closeTime: timeMs + 300000
-        });
-      }
-    }
-    return candles.slice(-250);
-  } catch (err: any) {
-    console.warn('[Data Feed] Yahoo GC=F fetch failed:', err?.message || err);
-    return [];
-  }
+function getClosedCandles(candles: Candle[], now: Date = new Date()): Candle[] {
+  const nowMs = now.getTime();
+  return candles
+    .filter(c => Number.isFinite(c.openTime) && Number.isFinite(c.closeTime)
+      && c.closeTime > c.openTime && c.closeTime <= nowMs)
+    .sort((a, b) => a.openTime - b.openTime);
 }
 
-async function fetchBitfinex5mKlines(): Promise<Candle[]> {
-  try {
-    const res = await axios.get('https://api-pub.bitfinex.com/v2/candles/trade:5m:tXAUT:USD/hist?limit=250', { timeout: 6000 });
-    if (!Array.isArray(res.data) || res.data.length < 50) return [];
-    return res.data.slice().reverse().map((c: any[]) => ({
-      openTime: c[0],
-      open: c[1],
-      close: c[2],
-      high: c[3],
-      low: c[4],
-      volume: c[5] || 0,
-      closeTime: c[0] + 300000
-    }));
-  } catch (err: any) {
-    console.warn('[Data Feed] Bitfinex fetch failed:', err?.message || err);
-    return [];
-  }
+function isFreshClosedCandleData(candles: Candle[], now: Date = new Date()): boolean {
+  const latest = candles[candles.length - 1];
+  if (!latest) return false;
+  const ageMs = now.getTime() - latest.closeTime;
+  return ageMs >= 0 && ageMs <= MAX_CLOSED_CANDLE_AGE_MS;
 }
 
-async function fetchKraken5mKlines(): Promise<Candle[]> {
-  try {
-    const res = await axios.get('https://api.kraken.com/0/public/OHLC?pair=PAXGUSD&interval=5', { timeout: 6000 });
-    const pairKey = Object.keys(res.data?.result || {}).find(k => k !== 'last');
-    if (!pairKey) return [];
-    const rawCandles = res.data.result[pairKey];
-    if (!Array.isArray(rawCandles) || rawCandles.length < 50) return [];
-    return rawCandles.slice(-250).map((c: any[]) => ({
-      openTime: c[0] * 1000,
-      open: parseFloat(c[1]),
-      high: parseFloat(c[2]),
-      low: parseFloat(c[3]),
-      close: parseFloat(c[4]),
-      volume: parseFloat(c[6]),
-      closeTime: (c[0] * 1000) + 300000
-    }));
-  } catch (err: any) {
-    console.warn('[Data Feed] Kraken fetch failed:', err?.message || err);
-    return [];
+function formatCairoTime(date: Date): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: DISPLAY_TIME_ZONE,
+    dateStyle: 'short',
+    timeStyle: 'short'
+  }).format(date);
+}
+
+async function getRiskCircuitBreakerReason(): Promise<string | null> {
+  const now = new Date();
+  const startOfUtcDay = new Date(now);
+  startOfUtcDay.setUTCHours(0, 0, 0, 0);
+
+  const todaysTrades = await TradeHistory.find({
+    tradeType: 'SCALP',
+    closedAt: { $gte: startOfUtcDay }
+  }).select('status netPnLUSD closedAt').sort({ closedAt: -1 }).lean();
+
+  const todaysNet = todaysTrades.reduce((total, trade) => {
+    return total + (typeof trade.netPnLUSD === 'number' ? trade.netPnLUSD : 0);
+  }, 0);
+  if (todaysNet <= -getMaxDailyLossUSD()) {
+    return `Daily model-loss limit reached (${todaysNet.toFixed(2)} USD).`;
   }
+
+  const maxConsecutiveLosses = getMaxConsecutiveLosses();
+  const recentTrades = await TradeHistory.find({ tradeType: 'SCALP' })
+    .select('status closedAt')
+    .sort({ closedAt: -1 })
+    .limit(maxConsecutiveLosses)
+    .lean();
+  const latestLoss = recentTrades[0];
+  const isLossStreak = recentTrades.length >= maxConsecutiveLosses
+    && recentTrades.every(trade => trade.status === 'LOSS');
+  const coolingDown = latestLoss?.closedAt
+    && now.getTime() - new Date(latestLoss.closedAt).getTime() < getCoolDownMinutes() * 60 * 1000;
+
+  if (isLossStreak && coolingDown) {
+    return `${maxConsecutiveLosses} consecutive model losses; ${getCoolDownMinutes()} minute cooldown is active.`;
+  }
+  return null;
 }
 
 interface CandleFetchResponse {
@@ -212,56 +188,19 @@ interface CandleFetchResponse {
   feedSource: string;
 }
 
-async function fetchAsset5mCandles(symbol: string, source: string): Promise<CandleFetchResponse> {
-  const isGold = symbol.includes('XAU') || symbol.includes('GOLD') || symbol === 'GC=F' || symbol === 'PAXGUSDT' || symbol === 'PAXGUSD';
-
-  // 1. Primary Benchmark Feed for Gold: Real Interbank Spot Gold via Twelve Data (100% Broker/XM Match)
-  if (isGold || source === 'TWELVEDATA') {
-    const tdSymbol = isGold ? 'XAU/USD' : symbol;
-    const result = await fetchTwelveData5mKlines(tdSymbol, '5min', 250);
-    if (result?.candles && result.candles.length >= 100) {
-      return { candles: result.candles, feedSource: 'TWELVEDATA (Interbank Spot XAU/USD Benchmark - XM Match)' };
-    }
+async function fetchAsset5mCandles(symbol: string): Promise<CandleFetchResponse> {
+  const result = await fetchTwelveData5mKlines(symbol, '5min', 250);
+  if (result?.candles && result.candles.length >= 100) {
+    return { candles: result.candles, feedSource: `TWELVEDATA ${symbol}` };
   }
-
-  // 2. Secondary Spot Gold Feed: Kraken (Spot Cash Gold PAXG/USD)
-  if (isGold) {
-    const krakenCandles = await fetchKraken5mKlines();
-    if (krakenCandles && krakenCandles.length >= 100) {
-      return { candles: krakenCandles, feedSource: 'KRAKEN (Spot Cash Gold PAXG/USD)' };
-    }
-
-    // 3. Tertiary Spot Gold Feed: Bitfinex (XAUT/USD Tether Gold Spot Cash)
-    const bitfinexCandles = await fetchBitfinex5mKlines();
-    if (bitfinexCandles && bitfinexCandles.length >= 100) {
-      return { candles: bitfinexCandles, feedSource: 'BITFINEX (Spot Cash Gold XAUT/USD)' };
-    }
-  }
-
-  // 4. High-speed Binance Feed
-  if (source === 'BINANCE' || isGold) {
-    try {
-      const binanceSymbol = isGold ? 'PAXGUSDT' : symbol;
-      const binanceCandles = await fetchBinanceKlines(binanceSymbol, '5m', 250);
-      if (binanceCandles && binanceCandles.length >= 100) {
-        return { candles: binanceCandles, feedSource: 'BINANCE (PAXGUSDT)' };
-      }
-    } catch (binanceErr: any) {
-      console.warn(`[Data Feed] Binance fetch failed for ${symbol}: ${binanceErr?.message || binanceErr}`);
-    }
-  }
-
-  return { candles: [], feedSource: 'NONE' };
+  return { candles: [], feedSource: 'NONE (Twelve Data unavailable; proxy-price fallback disabled)' };
 }
 
 async function runScalperEngine() {
   const logs: string[] = [];
   logs.push(`Starting 5m Multi-Asset Scalper Engine Cycle (September 9 Strategy) at ${new Date().toISOString()}`);
 
-  // Market Day Filter: Per-symbol weekend check (Crypto 24/7, Forex/Indices/Gold pause on Sat/Sun)
-  const currentUtcDay = new Date().getUTCDay();
-  const isWeekendNow = (currentUtcDay === 0 || currentUtcDay === 6);
-  logs.push(`Market Day Check: UTC day ${currentUtcDay} (Weekend: ${isWeekendNow}). Per-symbol weekend filtering active.`);
+  logs.push(`Cairo clock: ${formatCairoTime(new Date())}. Gold session uses the COMEX global benchmark; closed or stale feeds are rejected.`);
 
   let dbConnected = false;
   let accountState: any = null;
@@ -289,27 +228,32 @@ async function runScalperEngine() {
         logs.push(`Evaluating ${pendingTrades.length} pending scalp trade(s)...`);
         for (const trade of pendingTrades) {
           const matchingItem = normalizeSymbol(trade.symbol);
-          if (isMarketWeekend(matchingItem.symbol)) {
-            logs.push(`[${matchingItem.symbol}] Market closed (weekend), skipping pending evaluation.`);
+          if (!isSessionAllowed(matchingItem.symbol)) {
+            logs.push(`[${matchingItem.symbol}] Broker market closed, skipping pending evaluation.`);
             continue;
           }
-          const fetchRes = await fetchAsset5mCandles(matchingItem.symbol, matchingItem.source);
-          const candles = fetchRes.candles;
+          const fetchRes = await fetchAsset5mCandles(matchingItem.symbol);
+          const candles = getClosedCandles(fetchRes.candles);
           if (!candles || candles.length === 0) {
             logs.push(`[Pending Evaluation] Could not fetch candles for ${trade.symbol} (${fetchRes.feedSource}). Will retry next cycle.`);
+            continue;
+          }
+          if (!isFreshClosedCandleData(candles)) {
+            const ageMinutes = ((Date.now() - candles[candles.length - 1].closeTime) / 60000).toFixed(1);
+            logs.push(`[Pending Evaluation] Stale ${fetchRes.feedSource} candles for ${trade.symbol} (${ageMinutes} minutes old). No outcome recorded.`);
             continue;
           }
 
           if (candles && candles.length > 0) {
             const entryTimeMs = trade.timestamp ? new Date(trade.timestamp).getTime() : 0;
 
-            // 1. فحص جميع الشموع التي تكونت منذ لحظة فتح الصفقة وحتى الآن (وليس فقط آخر شمعة!)
-            // لضمان عدم تفويت أي ذيل لمس الهدف في أي دقيقة سابقة
-            const candlesSinceEntry = candles.filter(c => {
-              const candleCloseTime = c.closeTime || (c.openTime + 300000);
-              return candleCloseTime >= (entryTimeMs - 60000);
-            });
-            const evalCandles = candlesSinceEntry.length > 0 ? candlesSinceEntry : [candles[candles.length - 1]];
+            // OHLC wicks from a candle that started before the entry cannot be
+            // attributed to this trade. Wait for a fully post-entry candle.
+            const evalCandles = candles.filter(c => c.openTime >= entryTimeMs && c.closeTime <= Date.now());
+            if (evalCandles.length === 0) {
+              logs.push(`[Pending Evaluation] No completed 5m candle wholly after entry for ${trade.symbol}; keeping the trade open.`);
+              continue;
+            }
 
             const currentCandle = candles[candles.length - 1];
             const currentPrice = currentCandle.close;
@@ -437,6 +381,8 @@ async function runScalperEngine() {
                 ema20: trade.ema20,
                 ema100: trade.ema100 || trade.ema200,
                 atr: trade.atr,
+                feedSource: trade.feedSource,
+                sourceCandleCloseTime: trade.sourceCandleCloseTime,
                 exitRsi: indExit ? indExit.currentRsi : undefined,
                 exitEma20: indExit ? indExit.currentEma20 : undefined,
                 exitEma100: indExit ? indExit.currentEma100 : undefined,
@@ -459,14 +405,14 @@ async function runScalperEngine() {
 
               let outcomeText = '';
               if (newStatus === 'WIN') {
-                outcomeText = `🎯 **تم تحقيق الهدف! (WIN)** 🚀\nالرمز: ${trade.symbol}\nسعر الخروج: ${formatPrice(exitPrice)}\nالربح المحقق: +${pnlPoints.toFixed(2)} نقطة (+${detailed.netPnLUSD.toFixed(2)} دولار)\nرصيد الحساب الجديد: ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                outcomeText = `🎯 **السعر المرجعي وصل للهدف (WIN تقديري)**\nالرمز: ${trade.symbol}\nسعر الخروج المرجعي: ${formatPrice(exitPrice)}\nالربح التقديري: +${pnlPoints.toFixed(2)} نقطة (+${detailed.netPnLUSD.toFixed(2)} دولار)\nالرصيد المحاسبي المسجل بالنظام: ${accountUpdate.newBalance.toFixed(2)} دولار\n\nالنتيجة محسوبة من شموع Twelve Data المكتملة بعد الدخول؛ ليست تأكيد تنفيذ أو ربح من وسيطك.`;
               } else if (newStatus === 'BREAKEVEN') {
                 const pnlSign = detailed.netPnLUSD >= 0 ? '+' : '';
                 const isBigBe = pnlPoints >= 1.5;
                 const beTitle = isBigBe ? '🔒 **إغلاق بتأمين أرباح متقدم (Breakeven كبير)!** 💵' : '🛡 **إغلاق على تأمين الدخول (BREAKEVEN)!** ⚖️';
-                outcomeText = `${beTitle}\nالرمز: ${trade.symbol}\nسعر الخروج: ${formatPrice(exitPrice)}\nالربح المحقق: +${pnlPoints.toFixed(2)} نقطة (${pnlSign}${detailed.netPnLUSD.toFixed(2)} دولار صافي بعد السبريد)\nرصيد الحساب: ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                outcomeText = `${beTitle}\nالرمز: ${trade.symbol}\nسعر الخروج المرجعي: ${formatPrice(exitPrice)}\nالربح التقديري: +${pnlPoints.toFixed(2)} نقطة (${pnlSign}${detailed.netPnLUSD.toFixed(2)} دولار بعد السبريد التقديري)\nالرصيد المحاسبي المسجل بالنظام: ${accountUpdate.newBalance.toFixed(2)} دولار\n\nالنتيجة محسوبة من شموع Twelve Data المكتملة بعد الدخول؛ ليست تأكيد تنفيذ أو ربح من وسيطك.`;
               } else {
-                outcomeText = `📉 **ضرب وقف الخسارة! (LOSS)** 🛡\nالرمز: ${trade.symbol}\nسعر الخروج: ${formatPrice(exitPrice)}\nالخسارة: ${pnlPoints.toFixed(2)} نقطة (${detailed.netPnLUSD.toFixed(2)} دولار)\nرصيد الحساب: ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                outcomeText = `📉 **وصل السعر المرجعي لمستوى الخروج (LOSS تقديري)**\nالرمز: ${trade.symbol}\nسعر الخروج المرجعي: ${formatPrice(exitPrice)}\nالخسارة التقديرية: ${pnlPoints.toFixed(2)} نقطة (${detailed.netPnLUSD.toFixed(2)} دولار)\nالرصيد المحاسبي المسجل بالنظام: ${accountUpdate.newBalance.toFixed(2)} دولار\n\nالنتيجة محسوبة من شموع Twelve Data المكتملة بعد الدخول؛ ليست تأكيد تنفيذ أو ربح من وسيطك.`;
               }
               await sendTelegramNotification(outcomeText);
 
@@ -629,6 +575,8 @@ async function runScalperEngine() {
                     ema20: trade.ema20,
                     ema100: trade.ema100 || trade.ema200,
                     atr: trade.atr,
+                    feedSource: trade.feedSource,
+                    sourceCandleCloseTime: trade.sourceCandleCloseTime,
                     exitRsi: indExit ? indExit.currentRsi : undefined,
                     exitEma20: indExit ? indExit.currentEma20 : undefined,
                     exitEma100: indExit ? indExit.currentEma100 : undefined,
@@ -646,7 +594,7 @@ async function runScalperEngine() {
                   trade.balanceAfterTrade = accountUpdate.newBalance;
                   await trade.save();
 
-                  const timeStopMsg = `⏱️ **(TIME STOP)**\nمرور 120 دقيقة والصفقة خاسرة. تم إغلاق الصفقة بسعر السوق ${formatPrice(currentPrice)} لرمز ${trade.symbol} لتفريغ السيولة (الخسارة: ${detailed.netPnLUSD.toFixed(2)} دولار).\nرصيد الحساب: ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                  const timeStopMsg = `⏱️ **(TIME STOP تقديري)**\nمرور 120 دقيقة والصفقة خاسرة حسب السعر المرجعي ${formatPrice(currentPrice)} لرمز ${trade.symbol} (الخسارة التقديرية: ${detailed.netPnLUSD.toFixed(2)} دولار).\nالرصيد المحاسبي المسجل بالنظام: ${accountUpdate.newBalance.toFixed(2)} دولار\n\nالنتيجة محسوبة من بيانات Twelve Data وليست تأكيد تنفيذ أو إغلاق من وسيطك.`;
                   logs.push(timeStopMsg);
                   console.log(timeStopMsg);
                   await sendTelegramNotification(timeStopMsg);
@@ -661,34 +609,36 @@ async function runScalperEngine() {
     }
   }
 
-  // 2. Intra-bar Safe Gate: When NO trade is open, ONLY scan for entries on 5-minute candle closes (:00, :05, :10, :15...)
-  const currentMinute = new Date().getUTCMinutes();
-  const is5mCandleBoundary = (currentMinute % 5 === 0);
-
-  if (!is5mCandleBoundary) {
-    const idleMsg = `[Intra-5m Safe Gate] Minute :${currentMinute.toString().padStart(2, '0')} is an intra-bar monitoring cycle. New entry scan is scheduled for 5m candle close boundaries (:00, :05, :10...). Skipping new scan.`;
-    logs.push(idleMsg);
-    return {
-      success: true,
-      engine: '5m High-Frequency Scalper (Adaptive 1m Monitor / 5m Entry)',
-      mode: 'INTRA_5M_MONITOR_IDLE',
-      currentMinute,
-      logs
-    };
-  }
-
-  // 3. Filter active assets and iterate concurrently (Promise.allSettled)
+  // Scan each invocation because REST candle delivery can trail the bar close.
+  // Persisted sourceCandleCloseTime prevents duplicate alerts for the same bar.
   const activeWatchlist = SCALP_WATCHLIST.filter(item => item.enabled);
   logs.push(`Active Watchlist (${activeWatchlist.length} assets): ${activeWatchlist.map(a => a.symbol).join(', ')}`);
+
+  let entryRiskBlockReason: string | null = null;
+  if (!dbConnected) {
+    entryRiskBlockReason = 'Database unavailable; refusing to create untracked signals.';
+  } else {
+    try {
+      entryRiskBlockReason = await getRiskCircuitBreakerReason();
+      if (entryRiskBlockReason) logs.push(`[Entry Circuit Breaker] ${entryRiskBlockReason}`);
+    } catch (riskStateError: any) {
+      entryRiskBlockReason = 'Could not verify model risk limits; refusing new signals.';
+      logs.push(`[Entry Circuit Breaker] ${entryRiskBlockReason} ${riskStateError?.message || riskStateError}`);
+    }
+  }
 
   const assetPromises = activeWatchlist.map(async (item) => {
     const { symbol, source } = item;
     try {
-      if (isMarketWeekend(symbol)) {
-        const weekendMsg = `[${symbol}] Weekend detected: Market closed for this asset. Skipping.`;
-        console.log(weekendMsg);
-        logs.push(weekendMsg);
-        return { symbol, signalTriggered: false, skipped: true, reason: weekendMsg };
+      if (entryRiskBlockReason) {
+        return { symbol, signalTriggered: false, skipped: true, reason: entryRiskBlockReason };
+      }
+
+      if (!isSessionAllowed(symbol)) {
+        const closedMsg = `[${symbol}] Outside the broker trading session. Skipping.`;
+        console.log(closedMsg);
+        logs.push(closedMsg);
+        return { symbol, signalTriggered: false, skipped: true, reason: closedMsg };
       }
 
       if (dbConnected) {
@@ -705,11 +655,26 @@ async function runScalperEngine() {
       }
 
       logs.push(`Processing 5m candles for ${symbol} via ${source}...`);
-      const fetchRes = await fetchAsset5mCandles(symbol, source);
-      const candles = fetchRes.candles;
+      const fetchRes = await fetchAsset5mCandles(symbol);
+      const candles = getClosedCandles(fetchRes.candles);
 
       if (!candles || candles.length < 100) {
         const msg = `Insufficient candle data for ${symbol} (${fetchRes.feedSource}). Skipping.`;
+        logs.push(msg);
+        return { symbol, signalTriggered: false, skipped: true, reason: msg };
+      }
+
+      if (!isFreshClosedCandleData(candles)) {
+        const ageMinutes = ((Date.now() - candles[candles.length - 1].closeTime) / 60000).toFixed(1);
+        const msg = `[${symbol}] Latest completed candle is stale (${ageMinutes} minutes old; max ${MAX_CLOSED_CANDLE_AGE_MS / 60000}). Skipping signal.`;
+        logs.push(msg);
+        return { symbol, signalTriggered: false, skipped: true, reason: msg };
+      }
+
+      const initialSignalAgeMs = Date.now() - candles[candles.length - 1].closeTime;
+      if (initialSignalAgeMs > MAX_ENTRY_SIGNAL_AGE_MS) {
+        const ageSeconds = (initialSignalAgeMs / 1000).toFixed(0);
+        const msg = `[${symbol}] Latest candle is ${ageSeconds}s old; entry signals expire after ${MAX_ENTRY_SIGNAL_AGE_MS / 1000}s. Skipping.`;
         logs.push(msg);
         return { symbol, signalTriggered: false, skipped: true, reason: msg };
       }
@@ -722,8 +687,24 @@ async function runScalperEngine() {
       }
 
       const { currentClose, currentLow, currentHigh, currentEma20, currentEma100, currentEma200, currentRsi, prevRsi, currentAtr } = ind;
-      const latestCandleTime = new Date(candles[candles.length - 1].openTime).toLocaleTimeString('en-US', { timeZone: 'Africa/Cairo' });
-      logs.push(`[Data Feed Confirmed: ${fetchRes.feedSource}] Fetched ${candles.length} candles for ${symbol}. Latest price: ${currentClose} (Candle Cairo time: ${latestCandleTime})`);
+      const latestClosedCandle = candles[candles.length - 1];
+      const sourceCandleCloseTime = new Date(latestClosedCandle.closeTime);
+      const sourceSignalExpiresAt = new Date(latestClosedCandle.closeTime + ENTRY_SIGNAL_VALIDITY_MS);
+      const latestCandleTime = formatCairoTime(new Date(latestClosedCandle.closeTime));
+      logs.push(`[Data Feed Confirmed: ${fetchRes.feedSource}] Fetched ${candles.length} closed candles for ${symbol}. Latest price: ${currentClose} (bar closed: ${latestCandleTime} Cairo time)`);
+
+      if (!dbConnected) {
+        const msg = `[${symbol}] Database unavailable. Refusing to send an untracked signal.`;
+        logs.push(msg);
+        return { symbol, signalTriggered: false, skipped: true, reason: msg };
+      }
+
+      const priorSignalForBar = await Trade.findOne({ symbol, tradeType: 'SCALP', sourceCandleCloseTime });
+      if (priorSignalForBar) {
+        const msg = `[${symbol}] A signal was already recorded for the ${latestCandleTime} candle. Skipping duplicate.`;
+        logs.push(msg);
+        return { symbol, signalTriggered: false, skipped: true, reason: msg };
+      }
 
       // توافق الصورة الكبيرة والاتجاه العام (Macro Trend Confluence via EMA200 & EMA100):
       // EMA200 على فريم الـ 5 دقائق = 16.6 ساعة حركة سعر (الاتجاه الكلي لليوم).
@@ -790,10 +771,13 @@ async function runScalperEngine() {
         spec.contractSize
       );
 
-      // 🛡️ فحص سقف المخاطرة الأقصى (Max Risk Cap $7.00):
-      // حماية الحساب من قفزات الـ ATR العنيفة وقت الأخبار (لمنع خسائر 13$)
-      if (posSize.exceedsMaxRiskCap) {
-        const capMsg = `[${symbol}] 🚨 تجاوز سقف المخاطرة الأقصى (${posSize.actualRiskUSD.toFixed(2)} > $7.00) بسبب اتساع الـ ATR (${currentAtr.toFixed(2)} نقطة) وقت التقلبات العنيفة. تم إلغاء الإشارة تلقائياً لحماية رأس المال.`;
+      // Fail closed both on the absolute dollar cap and when minimum/compounding
+      // lot sizing would exceed the requested risk budget by more than 20%.
+      if (posSize.exceedsMaxRiskCap || posSize.hasRiskWarning) {
+        const reason = posSize.exceedsMaxRiskCap
+          ? 'actual risk exceeds the configured dollar cap'
+          : 'minimum/compounding lot size exceeds the target risk budget by over 20%';
+        const capMsg = `[${symbol}] 🚨 ${reason} (actual $${posSize.actualRiskUSD.toFixed(2)} vs target $${posSize.targetRiskUSD.toFixed(2)}; ATR ${currentAtr.toFixed(2)}). Signal cancelled.`;
         logs.push(capMsg);
         console.warn(capMsg);
         return { symbol, signalTriggered: false, skipped: true, reason: capMsg };
@@ -810,45 +794,60 @@ async function runScalperEngine() {
         ema20: currentEma20,
         ema100: currentEma100,
         ema200: currentEma200,
-        atr: currentAtr
+        atr: currentAtr,
+        feedSource: fetchRes.feedSource,
+        sourceCandleCloseTime
       };
 
-      // 🤖 Groq AI Parallel Processing: تقييم الذكاء وتوليد التنبيه في نفس اللحظة بالتوازي لتقليل التأخير إلى أقصى حد
+      // Validate the setup before it is persisted or sent. The alert itself is
+      // deterministic so a second generative request cannot delay the price.
       const isMondayToday = new Date().getUTCDay() === 1;
-      const [groqValidation, groqAnalysis] = await Promise.all([
-        validateTradeConfluenceWithGroq({
-          symbol,
-          action: signalType,
-          triggerReason: triggerReason || 'CROSSOVER',
-          entryPrice: currentClose,
-          sl,
-          tp,
-          rsi: currentRsi,
-          ema20: currentEma20,
-          ema100: currentEma100,
-          ema200: currentEma200,
-          atr: currentAtr,
-          isMonday: isMondayToday
-        }),
-        generateGroqArabicAlert(signalDetails)
-      ]);
+      const groqValidation = await validateTradeConfluenceWithGroq({
+        symbol,
+        action: signalType,
+        triggerReason: triggerReason || 'CROSSOVER',
+        entryPrice: currentClose,
+        sl,
+        tp,
+        rsi: currentRsi,
+        ema20: currentEma20,
+        ema100: currentEma100,
+        ema200: currentEma200,
+        atr: currentAtr,
+        isMonday: isMondayToday
+      });
 
       logs.push(`🤖 [${symbol}] تقييم Groq AI للصفقة: ${groqValidation.score}/10 | السبب: ${groqValidation.reason}`);
 
+      if (!groqValidation.approved) {
+        const msg = `[${symbol}] Groq rejected the setup (${groqValidation.score}/10). No signal sent.`;
+        logs.push(msg);
+        return { symbol, signalTriggered: false, skipped: true, reason: msg, groqValidation };
+      }
+
+      if (!isSessionAllowed(symbol) || Date.now() - latestClosedCandle.closeTime > MAX_ENTRY_SIGNAL_AGE_MS) {
+        const msg = `[${symbol}] Market closed or candle became stale during validation. No signal sent.`;
+        logs.push(msg);
+        return { symbol, signalTriggered: false, skipped: true, reason: msg };
+      }
+
+      const groqAnalysis = `إشارة ${signalType} على الذهب بناءً على شمعة 5 دقائق مكتملة.`;
+
       // Save to MongoDB with tradeType: 'SCALP'
-      if (dbConnected) {
-        try {
-          const newTrade = new Trade({
-            ...signalDetails,
-            tradeType: 'SCALP',
-            groqAnalysis,
-            status: 'ALERT_SENT',
-            timestamp: new Date()
-          });
-          await newTrade.save();
-        } catch (saveErr: any) {
-          logs.push(`Database log error for ${symbol}: ${saveErr?.message || saveErr}`);
-        }
+      let persistedTrade: any = null;
+      try {
+        persistedTrade = new Trade({
+          ...signalDetails,
+          tradeType: 'SCALP',
+          groqAnalysis,
+          status: 'ALERT_SENT',
+          timestamp: new Date()
+        });
+        await persistedTrade.save();
+      } catch (saveErr: any) {
+        logs.push(`Database log error for ${symbol}: ${saveErr?.message || saveErr}`);
+        const duplicate = saveErr?.code === 11000;
+        return { symbol, signalTriggered: false, skipped: duplicate, error: duplicate ? undefined : 'Could not persist signal; alert not sent.' };
       }
 
       // 50% Breakeven Target level for immediate trader notification
@@ -862,8 +861,25 @@ async function runScalperEngine() {
 
       // Send Telegram Alert
       const macroInfo = currentEma200 ? ` | EMA200 (الصورة الكبيرة): ${formatPrice(currentEma200)}` : '';
-      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج مع الصورة الكبيرة:**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- نوع الدخول: ${entryTypeArabic}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- سعر الدخول: ${formatPrice(currentClose)}\n- حجم اللوت المقترح: ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: ${posSize.actualRiskUSD.toFixed(2)} دولار)\n- وقف الخسارة SL (1.5x ATR): ${formatPrice(sl)}\n- الهدف TP (2.0x ATR): ${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): ${formatPrice(beTargetPrice)}\n- مؤشر ATR (14): ${formatPrice(signalDetails.atr)} نقطة\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: ${formatPrice(signalDetails.ema20)} | EMA100: ${formatPrice(signalDetails.ema100)}${macroInfo}`;
-      await sendTelegramNotification(telegramMsg);
+      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج مع الصورة الكبيرة:**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- نوع الدخول: ${entryTypeArabic}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- السعر المرجعي (إغلاق شمعة 5 دقائق): ${formatPrice(currentClose)}\n- وقت إغلاق الشمعة: ${formatCairoTime(sourceCandleCloseTime)} (Cairo time)\n- صلاحية الإشارة حتى: ${formatCairoTime(sourceSignalExpiresAt)}؛ تجاهلها لو وصلت بعد الموعد\n- مصدر السعر: ${fetchRes.feedSource}؛ السعر مرجعي وليس تنفيذًا مؤكدًا لدى الوسيط\n- حجم اللوت التقديري: ${posSize.lotSize.toFixed(2)} (الحساب يفترض عقد 100 أونصة؛ راجع مواصفات عقد وسيطك)\n- المخاطرة التقديرية: ${posSize.actualRiskUSD.toFixed(2)} دولار\n- وقف الخسارة SL (1.5x ATR): ${formatPrice(sl)}\n- الهدف TP (2.0x ATR): ${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): ${formatPrice(beTargetPrice)}\n- مؤشر ATR (14): ${formatPrice(signalDetails.atr)} نقطة\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: ${formatPrice(signalDetails.ema20)} | EMA100: ${formatPrice(signalDetails.ema100)}${macroInfo}`;
+
+      if (Date.now() - latestClosedCandle.closeTime > MAX_ENTRY_SIGNAL_AGE_MS) {
+        persistedTrade.status = 'ARCHIVED';
+        persistedTrade.closedAt = new Date();
+        await persistedTrade.save();
+        const msg = `[${symbol}] Signal exceeded its age limit before Telegram dispatch; archived without sending.`;
+        logs.push(msg);
+        return { symbol, signalTriggered: false, skipped: true, reason: msg };
+      }
+
+      const sent = await sendTelegramNotification(telegramMsg);
+      if (!sent) {
+        persistedTrade.status = 'ARCHIVED';
+        persistedTrade.closedAt = new Date();
+        await persistedTrade.save();
+        logs.push(`[${symbol}] Telegram delivery failed; unsent signal was archived.`);
+        return { symbol, signalTriggered: false, skipped: true, reason: 'Telegram delivery failed.' };
+      }
 
       return { symbol, signalTriggered: true, signal: signalDetails, groqAnalysis, groqValidation };
 

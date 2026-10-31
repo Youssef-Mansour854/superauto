@@ -31,6 +31,8 @@ export interface ITradeHistory extends Document {
   exitAtr?: number;
   newsHeadlines?: string[];
   groqAnalysis?: string;
+  feedSource?: string;
+  sourceCandleCloseTime?: Date;
   entryTimestamp?: Date;
   closedAt: Date;
 }
@@ -66,6 +68,8 @@ const TradeHistorySchema: Schema = new Schema<ITradeHistory>({
   exitAtr: { type: Number },
   newsHeadlines: [{ type: String }],
   groqAnalysis: { type: String },
+  feedSource: { type: String },
+  sourceCandleCloseTime: { type: Date },
   entryTimestamp: { type: Date },
   closedAt: { type: Date, default: Date.now }
 }, { collection: 'trade_history' });

@@ -31,7 +31,15 @@ export async function fetchTwelveData5mKlines(
   outputsize: number = 100
 ): Promise<CandleFetchResult> {
   const apiSymbol = normalizeTwelveDataSymbol(symbol);
-  const apiKey = process.env.TWELVEDATA_API_KEY || '29d676f8d5874b54bc16c98f1698e528';
+  const apiKey = process.env.TWELVEDATA_API_KEY;
+  if (!apiKey) {
+    return {
+      candles: [],
+      httpStatus: 0,
+      errorMessage: 'TWELVEDATA_API_KEY is not configured',
+      candleCount: 0
+    };
+  }
   const url = `https://api.twelvedata.com/time_series`;
 
   try {
@@ -41,6 +49,7 @@ export async function fetchTwelveData5mKlines(
         interval,
         outputsize,
         apikey: apiKey,
+        timezone: 'UTC',
       },
       timeout: 10000,
       validateStatus: () => true // Handle 4xx/5xx status gracefully to capture exact HTTP code
@@ -91,7 +100,9 @@ export async function fetchTwelveData5mKlines(
         const low = parseFloat(item.low);
         const close = parseFloat(item.close);
         const volume = parseFloat(item.volume || '0');
-        const openTime = new Date(item.datetime).getTime();
+        const rawDateTime = String(item.datetime);
+        const utcDateTime = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(rawDateTime) ? rawDateTime : `${rawDateTime}Z`;
+        const openTime = new Date(utcDateTime).getTime();
         const closeTime = openTime + 5 * 60 * 1000;
 
         if (isNaN(close) || isNaN(openTime)) {

@@ -26,6 +26,8 @@ export interface ITrade extends Document {
   groqAnalysis?: string;
   status: 'ALERT_SENT' | 'WIN' | 'LOSS' | 'ARCHIVED';
   breakevenApplied?: boolean;
+  feedSource?: string;
+  sourceCandleCloseTime?: Date;
   closedAt?: Date;
   timestamp: Date;
 }
@@ -56,9 +58,16 @@ const TradeSchema: Schema = new Schema<ITrade>({
   groqAnalysis: { type: String },
   status: { type: String, enum: ['ALERT_SENT', 'WIN', 'LOSS', 'ARCHIVED'], default: 'ALERT_SENT', index: true },
   breakevenApplied: { type: Boolean, default: false },
+  feedSource: { type: String },
+  sourceCandleCloseTime: { type: Date },
   closedAt: { type: Date },
   timestamp: { type: Date, default: Date.now }
 });
+
+TradeSchema.index(
+  { symbol: 1, sourceCandleCloseTime: 1 },
+  { unique: true, partialFilterExpression: { sourceCandleCloseTime: { $type: 'date' } } }
+);
 
 const Trade: Model<ITrade> = mongoose.models.Trade || mongoose.model<ITrade>('Trade', TradeSchema);
 
