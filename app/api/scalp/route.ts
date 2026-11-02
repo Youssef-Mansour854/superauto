@@ -75,9 +75,9 @@ function normalizeSymbol(symbol: string): { symbol: string; source: string } {
 // Freshness checks also reject stale data during holidays and unscheduled stops.
 const GOLD_MARKET_TIME_ZONE = 'America/New_York';
 const DISPLAY_TIME_ZONE = 'Africa/Cairo';
-const MAX_CLOSED_CANDLE_AGE_MS = 7 * 60 * 1000;
-const MAX_ENTRY_SIGNAL_AGE_MS = 60 * 1000;
-const ENTRY_SIGNAL_VALIDITY_MS = 90 * 1000;
+const MAX_CLOSED_CANDLE_AGE_MS = 10 * 60 * 1000;
+const MAX_ENTRY_SIGNAL_AGE_MS = 5 * 60 * 1000; // 5 minutes: matches full 5m bar duration
+const ENTRY_SIGNAL_VALIDITY_MS = 5 * 60 * 1000;
 
 function isGoldSymbol(symbol: string): boolean {
   const norm = (symbol || '').toUpperCase();
