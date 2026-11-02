@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import mongoose from 'mongoose';
 import { connectToDatabase } from '@/lib/mongodb';
 import Trade from '@/models/Trade';
 import TradeHistory from '@/models/TradeHistory';
@@ -210,6 +211,13 @@ async function runScalperEngine() {
     const db = await connectToDatabase();
     if (db) {
       dbConnected = true;
+      try {
+        await mongoose.connection.db?.collection('system_heartbeat').updateOne(
+          { _id: 'scalp_cron' as any },
+          { $set: { lastRunAt: new Date(), lastRunCairo: formatCairoTime(new Date()) } },
+          { upsert: true }
+        );
+      } catch {}
       accountState = await getLiveAccountState();
       if (accountState && typeof accountState.currentBalance === 'number') {
         currentLiveBal = accountState.currentBalance;
