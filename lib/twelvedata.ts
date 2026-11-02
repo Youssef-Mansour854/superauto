@@ -31,8 +31,9 @@ export async function fetchTwelveData5mKlines(
   outputsize: number = 100
 ): Promise<CandleFetchResult> {
   const apiSymbol = normalizeTwelveDataSymbol(symbol);
-  const apiKey = process.env.TWELVEDATA_API_KEY;
-  if (!apiKey) {
+  const rawKeyString = process.env.TWELVEDATA_API_KEY || '29d676f8d5874b54bc16c98f1698e528';
+  const apiKeys = rawKeyString.split(',').map(k => k.trim()).filter(Boolean);
+  if (apiKeys.length === 0) {
     return {
       candles: [],
       httpStatus: 0,
@@ -40,108 +41,135 @@ export async function fetchTwelveData5mKlines(
       candleCount: 0
     };
   }
+
+  let lastResult: CandleFetchResult = {
+    candles: [],
+    httpStatus: 0,
+    errorMessage: null,
+    candleCount: 0
+  };
+
   const url = `https://api.twelvedata.com/time_series`;
 
-  try {
-    const response = await axios.get(url, {
-      params: {
-        symbol: apiSymbol,
-        interval,
-        outputsize,
-        apikey: apiKey,
-        timezone: 'UTC',
-      },
-      timeout: 10000,
-      validateStatus: () => true // Handle 4xx/5xx status gracefully to capture exact HTTP code
-    });
+  for (let i = 0; i < apiKeys.length; i++) {
+    const apiKey = apiKeys[i];
+    try {
+      const response = await axios.get(url, {
+        params: {
+          symbol: apiSymbol,
+          interval,
+          outputsize,
+          apikey: apiKey,
+          timezone: 'UTC',
+        },
+        timeout: 10000,
+        validateStatus: () => true // Handle 4xx/5xx status gracefully to capture exact HTTP code
+      });
 
-    const httpStatus = response.status;
-    const data = response.data;
+      const httpStatus = response.status;
+      const data = response.data;
 
-    if (!data) {
+      if (!data) {
+        lastResult = {
+          candles: [],
+          httpStatus,
+          errorMessage: 'Empty response payload from Twelve Data',
+          candleCount: 0
+        };
+        continue;
+      }
+
+      if (httpStatus === 429 || data.code === 429 || (data.message && String(data.message).includes('run out of API credits'))) {
+        console.warn(`Twelve Data key ${i + 1}/${apiKeys.length} reached daily rate limit (429). Trying fallback key if available...`);
+        lastResult = {
+          candles: [],
+          httpStatus: 429,
+          errorMessage: sanitizeApiKey(data.message || 'Daily limit reached', apiKey),
+          candleCount: 0
+        };
+        continue;
+      }
+
+      if (httpStatus >= 400 || data.status === 'error') {
+        const rawMsg = data.message || (typeof data === 'string' ? data : JSON.stringify(data));
+        const cleanMsg = sanitizeApiKey(rawMsg, apiKey);
+        lastResult = {
+          candles: [],
+          httpStatus,
+          errorMessage: cleanMsg,
+          candleCount: 0
+        };
+        continue;
+      }
+
+      // Support single symbol or nested symbol object in response
+      const symbolData = data.values ? data : (data[apiSymbol] || data[symbol]);
+
+      if (!symbolData || !Array.isArray(symbolData.values) || symbolData.values.length === 0) {
+        const rawMsg = data.message || 'No candle values found in Twelve Data response';
+        lastResult = {
+          candles: [],
+          httpStatus,
+          errorMessage: sanitizeApiKey(rawMsg, apiKey),
+          candleCount: 0
+        };
+        continue;
+      }
+
+      const rawValues = symbolData.values;
+
+      const candles: Candle[] = rawValues
+        .map((item: any) => {
+          const open = parseFloat(item.open);
+          const high = parseFloat(item.high);
+          const low = parseFloat(item.low);
+          const close = parseFloat(item.close);
+          const volume = parseFloat(item.volume || '0');
+          const rawDateTime = String(item.datetime);
+          const utcDateTime = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(rawDateTime) ? rawDateTime : `${rawDateTime}Z`;
+          const openTime = new Date(utcDateTime).getTime();
+          const closeTime = openTime + 5 * 60 * 1000;
+
+          if (isNaN(close) || isNaN(openTime)) {
+            return null;
+          }
+
+          return {
+            openTime,
+            open: isNaN(open) ? close : open,
+            high: isNaN(high) ? close : high,
+            low: isNaN(low) ? close : low,
+            close,
+            volume: isNaN(volume) ? 0 : volume,
+            closeTime,
+          };
+        })
+        .filter((c: Candle | null): c is Candle => c !== null);
+
+      // Twelve Data returns candles in reverse chronological order (newest first).
+      // Technical indicators (EMA, RSI, ATR) require chronological order (oldest first).
+      candles.reverse();
+
       return {
-        candles: [],
+        candles,
         httpStatus,
-        errorMessage: 'Empty response payload from Twelve Data',
-        candleCount: 0
+        errorMessage: null,
+        candleCount: candles.length
       };
-    }
-
-    if (httpStatus >= 400 || data.status === 'error') {
-      const rawMsg = data.message || (typeof data === 'string' ? data : JSON.stringify(data));
+    } catch (error: any) {
+      const httpStatus = error?.response?.status || 500;
+      const rawMsg = error?.response?.data?.message || error?.message || 'Network / Axios request failed';
       const cleanMsg = sanitizeApiKey(rawMsg, apiKey);
-      return {
+      lastResult = {
         candles: [],
         httpStatus,
         errorMessage: cleanMsg,
         candleCount: 0
       };
     }
-
-    // Support single symbol or nested symbol object in response
-    const symbolData = data.values ? data : (data[apiSymbol] || data[symbol]);
-
-    if (!symbolData || !Array.isArray(symbolData.values) || symbolData.values.length === 0) {
-      const rawMsg = data.message || 'No candle values found in Twelve Data response';
-      return {
-        candles: [],
-        httpStatus,
-        errorMessage: sanitizeApiKey(rawMsg, apiKey),
-        candleCount: 0
-      };
-    }
-
-    const rawValues = symbolData.values;
-
-    const candles: Candle[] = rawValues
-      .map((item: any) => {
-        const open = parseFloat(item.open);
-        const high = parseFloat(item.high);
-        const low = parseFloat(item.low);
-        const close = parseFloat(item.close);
-        const volume = parseFloat(item.volume || '0');
-        const rawDateTime = String(item.datetime);
-        const utcDateTime = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(rawDateTime) ? rawDateTime : `${rawDateTime}Z`;
-        const openTime = new Date(utcDateTime).getTime();
-        const closeTime = openTime + 5 * 60 * 1000;
-
-        if (isNaN(close) || isNaN(openTime)) {
-          return null;
-        }
-
-        return {
-          openTime,
-          open: isNaN(open) ? close : open,
-          high: isNaN(high) ? close : high,
-          low: isNaN(low) ? close : low,
-          close,
-          volume: isNaN(volume) ? 0 : volume,
-          closeTime,
-        };
-      })
-      .filter((c: Candle | null): c is Candle => c !== null);
-
-    // Twelve Data returns candles in reverse chronological order (newest first).
-    // Technical indicators (EMA, RSI, ATR) require chronological order (oldest first).
-    candles.reverse();
-
-    return {
-      candles,
-      httpStatus,
-      errorMessage: null,
-      candleCount: candles.length
-    };
-  } catch (error: any) {
-    const httpStatus = error?.response?.status || 500;
-    const rawMsg = error?.response?.data?.message || error?.message || 'Network / Axios request failed';
-    const cleanMsg = sanitizeApiKey(rawMsg, apiKey);
-    return {
-      candles: [],
-      httpStatus,
-      errorMessage: cleanMsg,
-      candleCount: 0
-    };
   }
+
+  return lastResult;
 }
 
 export async function fetchTwelveDataBatch5mKlines(
