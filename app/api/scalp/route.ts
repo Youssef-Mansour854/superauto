@@ -825,13 +825,8 @@ async function runScalperEngine() {
         isMonday: isMondayToday
       });
 
-      logs.push(`🤖 [${symbol}] تقييم Groq AI للصفقة: ${groqValidation.score}/10 | السبب: ${groqValidation.reason}`);
-
-      if (!groqValidation.approved) {
-        const msg = `[${symbol}] Groq rejected the setup (${groqValidation.score}/10). No signal sent.`;
-        logs.push(msg);
-        return { symbol, signalTriggered: false, skipped: true, reason: msg, groqValidation };
-      }
+      // 🤖 Groq AI Advisory Evaluation: تقييم استشاري فقط مع إرسال الصفقة دائماً (Non-blocking mode)
+      logs.push(`🤖 [${symbol}] تقييم Groq AI الاستشاري للصفقة: ${groqValidation.score}/10 | السبب: ${groqValidation.reason}`);
 
       if (!isSessionAllowed(symbol) || Date.now() - latestClosedCandle.closeTime > MAX_ENTRY_SIGNAL_AGE_MS) {
         const msg = `[${symbol}] Market closed or candle became stale during validation. No signal sent.`;
