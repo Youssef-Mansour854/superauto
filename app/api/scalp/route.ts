@@ -14,6 +14,7 @@ import {
   getLiveAccountBalance,
   getLiveRiskPercent,
   getSymbolSpec,
+  getMaxTradeRiskUSD,
   getMaxDailyLossUSD,
   getMaxConsecutiveLosses,
   getCoolDownMinutes,
@@ -77,8 +78,8 @@ function normalizeSymbol(symbol: string): { symbol: string; source: string } {
 const GOLD_MARKET_TIME_ZONE = 'America/New_York';
 const DISPLAY_TIME_ZONE = 'Africa/Cairo';
 const MAX_CLOSED_CANDLE_AGE_MS = 10 * 60 * 1000;
-const MAX_ENTRY_SIGNAL_AGE_MS = 5 * 60 * 1000; // 5 minutes: matches full 5m bar duration
-const ENTRY_SIGNAL_VALIDITY_MS = 5 * 60 * 1000;
+const MAX_ENTRY_SIGNAL_AGE_MS = 7.5 * 60 * 1000; // 7.5 minutes: allows for 5m candle duration + cron interval + API latency
+const ENTRY_SIGNAL_VALIDITY_MS = 7.5 * 60 * 1000;
 
 function isGoldSymbol(symbol: string): boolean {
   const norm = (symbol || '').toUpperCase();
@@ -714,24 +715,17 @@ async function runScalperEngine() {
         return { symbol, signalTriggered: false, skipped: true, reason: msg };
       }
 
-      // توافق الصورة الكبيرة والاتجاه العام (Macro Trend Confluence via EMA200 & EMA100):
-      // EMA200 على فريم الـ 5 دقائق = 16.6 ساعة حركة سعر (الاتجاه الكلي لليوم).
-      // EMA100 = 8.3 ساعات (اتجاه الجلسة الحالي).
-      const isMacroBullish = currentClose > currentEma100 && (currentEma200 ? currentClose > currentEma200 : true);
-      const isMacroBearish = currentClose < currentEma100 && (currentEma200 ? currentClose < currentEma200 : true);
-
-      // فلتر عدم ملاحقة السعر (Anti-Chasing Value Zone): الدخول بالقرب من EMA20 وليس عند قمم وقيعان متطرفة
-      const isWithinBuyZone = (currentClose - currentEma20) <= (currentAtr * 0.85);
-      const isWithinSellZone = (currentEma20 - currentClose) <= (currentAtr * 0.85);
-
-      // Trend-Filtered Dynamic Momentum Strategy Rules:
+      // Trend-Filtered Dynamic Momentum Strategy Rules (September 9 Baseline + EMA20 Pullback):
       // 1. Initial Crossover Trigger (RSI Level 50 Crossover in Trend):
-      const isBuyCrossover = isMacroBullish && currentClose > currentEma20 && prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68 && isWithinBuyZone;
-      const isSellCrossover = isMacroBearish && currentClose < currentEma20 && prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32 && isWithinSellZone;
+      const isBuyTrend = currentClose > currentEma100 && currentClose > currentEma20;
+      const isSellTrend = currentClose < currentEma100 && currentClose < currentEma20;
+
+      const isBuyCrossover = isBuyTrend && prevRsi < 50 && currentRsi >= 50 && currentRsi <= 68;
+      const isSellCrossover = isSellTrend && prevRsi > 50 && currentRsi <= 50 && currentRsi >= 32;
 
       // 2. Trend Continuation Pullback / Retest to EMA20 Trigger:
-      const isBuyPullback = isMacroBullish && currentEma20 > currentEma100 && currentLow <= currentEma20 && currentClose >= currentEma20 && currentRsi >= 48 && currentRsi <= 68;
-      const isSellPullback = isMacroBearish && currentEma20 < currentEma100 && currentHigh >= currentEma20 && currentClose <= currentEma20 && currentRsi <= 52 && currentRsi >= 32;
+      const isBuyPullback = currentClose > currentEma100 && currentEma20 > currentEma100 && currentLow <= currentEma20 && currentClose >= currentEma20 && currentRsi >= 48 && currentRsi <= 68;
+      const isSellPullback = currentClose < currentEma100 && currentEma20 < currentEma100 && currentHigh >= currentEma20 && currentClose <= currentEma20 && currentRsi <= 52 && currentRsi >= 32;
 
       let signalType: 'BUY' | 'SELL' | null = null;
       let triggerReason: 'CROSSOVER' | 'PULLBACK' | null = null;
@@ -779,13 +773,9 @@ async function runScalperEngine() {
         spec.contractSize
       );
 
-      // Fail closed both on the absolute dollar cap and when minimum/compounding
-      // lot sizing would exceed the requested risk budget by more than 20%.
-      if (posSize.exceedsMaxRiskCap || posSize.hasRiskWarning) {
-        const reason = posSize.exceedsMaxRiskCap
-          ? 'actual risk exceeds the configured dollar cap'
-          : 'minimum/compounding lot size exceeds the target risk budget by over 20%';
-        const capMsg = `[${symbol}] 🚨 ${reason} (actual $${posSize.actualRiskUSD.toFixed(2)} vs target $${posSize.targetRiskUSD.toFixed(2)}; ATR ${currentAtr.toFixed(2)}). Signal cancelled.`;
+      // Fail closed only on absolute dollar cap (e.g. wild news candle ATR > $7), but allow broker minimum lot 0.01
+      if (posSize.exceedsMaxRiskCap) {
+        const capMsg = `[${symbol}] 🚨 actual risk exceeds the configured dollar cap (actual $${posSize.actualRiskUSD.toFixed(2)} vs cap $${getMaxTradeRiskUSD()}; ATR ${currentAtr.toFixed(2)}). Signal cancelled.`;
         logs.push(capMsg);
         console.warn(capMsg);
         return { symbol, signalTriggered: false, skipped: true, reason: capMsg };
@@ -864,7 +854,8 @@ async function runScalperEngine() {
 
       // Send Telegram Alert
       const macroInfo = currentEma200 ? ` | EMA200 (الصورة الكبيرة): ${formatPrice(currentEma200)}` : '';
-      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج مع الصورة الكبيرة:**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- نوع الدخول: ${entryTypeArabic}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- السعر المرجعي (إغلاق شمعة 5 دقائق): ${formatPrice(currentClose)}\n- وقت إغلاق الشمعة: ${formatCairoTime(sourceCandleCloseTime)} (Cairo time)\n- صلاحية الإشارة حتى: ${formatCairoTime(sourceSignalExpiresAt)}؛ تجاهلها لو وصلت بعد الموعد\n- مصدر السعر: ${fetchRes.feedSource}؛ السعر مرجعي وليس تنفيذًا مؤكدًا لدى الوسيط\n- حجم اللوت التقديري: ${posSize.lotSize.toFixed(2)} (الحساب يفترض عقد 100 أونصة؛ راجع مواصفات عقد وسيطك)\n- المخاطرة التقديرية: ${posSize.actualRiskUSD.toFixed(2)} دولار\n- وقف الخسارة SL (1.5x ATR): ${formatPrice(sl)}\n- الهدف TP (2.0x ATR): ${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): ${formatPrice(beTargetPrice)}\n- مؤشر ATR (14): ${formatPrice(signalDetails.atr)} نقطة\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: ${formatPrice(signalDetails.ema20)} | EMA100: ${formatPrice(signalDetails.ema100)}${macroInfo}`;
+      const riskWarnText = posSize.hasRiskWarning ? ` (⚠️ ${posSize.riskWarningMessage || 'أعلى من المستهدف بسبب الحد الأدنى للوت 0.01'})` : '';
+      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج مع الصورة الكبيرة:**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- نوع الدخول: ${entryTypeArabic}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- السعر المرجعي (إغلاق شمعة 5 دقائق): ${formatPrice(currentClose)}\n- وقت إغلاق الشمعة: ${formatCairoTime(sourceCandleCloseTime)} (Cairo time)\n- صلاحية الإشارة حتى: ${formatCairoTime(sourceSignalExpiresAt)}؛ تجاهلها لو وصلت بعد الموعد\n- مصدر السعر: ${fetchRes.feedSource}؛ السعر مرجعي وليس تنفيذًا مؤكدًا لدى الوسيط\n- حجم اللوت التقديري: ${posSize.lotSize.toFixed(2)} (الحساب يفترض عقد 100 أونصة؛ راجع مواصفات عقد وسيطك)\n- المخاطرة التقديرية: ${posSize.actualRiskUSD.toFixed(2)} دولار${riskWarnText}\n- وقف الخسارة SL (1.5x ATR): ${formatPrice(sl)}\n- الهدف TP (2.0x ATR): ${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): ${formatPrice(beTargetPrice)}\n- مؤشر ATR (14): ${formatPrice(signalDetails.atr)} نقطة\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: ${formatPrice(signalDetails.ema20)} | EMA100: ${formatPrice(signalDetails.ema100)}${macroInfo}`;
 
       if (Date.now() - latestClosedCandle.closeTime > MAX_ENTRY_SIGNAL_AGE_MS) {
         persistedTrade.status = 'ARCHIVED';
