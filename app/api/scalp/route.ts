@@ -885,8 +885,11 @@ async function runScalperEngine() {
         ? '🎯 ارتداد وإعادة اختبار (EMA20 Pullback)'
         : '⚡ تقاطع زخم مع الاتجاه (RSI Crossover)';
 
-      // Format the Telegram Alert to be clear, prominent, and directly actionable for trading:
+      // Format the Telegram Alert to be clear, prominent, and contain all strategy & AI details:
       const actionHeader = signalType === 'BUY' ? '🟢 توصية سكالبينج: شراء (BUY)' : '🔴 توصية سكالبينج: بيع (SELL)';
+      const macroInfo = currentEma200 ? ` | EMA200 (الصورة الكبيرة): ${formatPrice(currentEma200)}` : '';
+      const riskWarnText = posSize.hasRiskWarning ? `\n- ⚠️ **تنبيه إدارة المخاطر:** ${posSize.riskWarningMessage || 'المخاطرة الفعلية أعلى من 2% بسبب الحد الأدنى للوت 0.01'}` : '';
+
       const telegramMsg =
         `🚨 **${actionHeader}** 🚨\n\n` +
         `🪙 **الأصل:** ${symbol} (ذهب)\n` +
@@ -894,12 +897,15 @@ async function runScalperEngine() {
         `🛑 **وقف الخسارة (SL):** **${formatPrice(sl)}**\n` +
         `🎯 **هدف الأرباح (TP):** **${formatPrice(tp)}**\n` +
         `🛡️ **تأمين الدخول (Breakeven عند 50%):** **${formatPrice(beTargetPrice)}**\n` +
-        `📦 **حجم اللوت المقترح:** ${posSize.lotSize.toFixed(2)} لوت (مخاطرة: ${posSize.actualRiskUSD.toFixed(2)} دولار)\n\n` +
-        `📌 **تفاصيل الاستراتيجية:**\n` +
+        `📦 **حجم اللوت المقترح:** ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: ${posSize.actualRiskUSD.toFixed(2)} دولار)\n\n` +
+        `📊 **تفاصيل واستراتيجية الصفقة:**\n` +
         `- نوع الدخول: ${entryTypeArabic}\n` +
-        `- تقييم الذكاء الاصطناعي (Groq AI): ${groqValidation.score}/10 (${groqValidation.reason})\n` +
-        `- مؤشر RSI: ${formatPrice(signalDetails.rsi)} | ATR: ${formatPrice(signalDetails.atr)} نقطة\n` +
-        `- إغلاق شمعة 5 دقائق: ${formatCairoTime(sourceCandleCloseTime)} بتوقيت القاهرة`;
+        `- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n` +
+        `- وقت إغلاق الشمعة: ${formatCairoTime(sourceCandleCloseTime)} (Cairo time)\n` +
+        `- صلاحية الإشارة حتى: ${formatCairoTime(sourceSignalExpiresAt)}؛ تجاهلها لو تأخرت\n` +
+        `- مصدر السعر: ${fetchRes.feedSource}\n` +
+        `- مؤشر ATR (14): ${formatPrice(signalDetails.atr)} نقطة\n` +
+        `- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: ${formatPrice(signalDetails.ema20)} | EMA100: ${formatPrice(signalDetails.ema100)}${macroInfo}${riskWarnText}`;
 
       if (Date.now() - latestClosedCandle.closeTime > MAX_ENTRY_SIGNAL_AGE_MS) {
         persistedTrade.status = 'ARCHIVED';
