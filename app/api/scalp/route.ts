@@ -413,15 +413,37 @@ async function runScalperEngine() {
               logs.push(`Scalp trade ${trade._id} (${trade.symbol}) archived with result ${newStatus} (Net: ${detailed.netPnLUSD.toFixed(2)} USD)`);
 
               let outcomeText = '';
+              const tradeActionText = trade.action === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)';
               if (newStatus === 'WIN') {
-                outcomeText = `🎯 **السعر المرجعي وصل للهدف (WIN تقديري)**\nالرمز: ${trade.symbol}\nسعر الخروج المرجعي: ${formatPrice(exitPrice)}\nالربح التقديري: +${pnlPoints.toFixed(2)} نقطة (+${detailed.netPnLUSD.toFixed(2)} دولار)\nالرصيد المحاسبي المسجل بالنظام: ${accountUpdate.newBalance.toFixed(2)} دولار\n\nالنتيجة محسوبة من شموع Twelve Data المكتملة بعد الدخول؛ ليست تأكيد تنفيذ أو ربح من وسيطك.`;
+                outcomeText = `🎯 **تم تحقيق الهدف بنجاح (Take Profit Hit)!** 🟢\n\n` +
+                  `🪙 **الأصل:** ${trade.symbol} (ذهب)\n` +
+                  `📊 **نوع الصفقة:** ${tradeActionText}\n` +
+                  `💵 **سعر الدخول الأصلي:** ${formatPrice(trade.entryPrice)}\n` +
+                  `🎯 **سعر الخروج (الهدف):** ${formatPrice(exitPrice)}\n` +
+                  `🛑 **وقف الخسارة كان:** ${formatPrice(trade.sl)}\n` +
+                  `💰 **الربح المحقق:** +${pnlPoints.toFixed(2)} نقطة (+${detailed.netPnLUSD.toFixed(2)} دولار)\n` +
+                  `📈 **رصيد الحساب:** ${accountUpdate.newBalance.toFixed(2)} دولار`;
               } else if (newStatus === 'BREAKEVEN') {
                 const pnlSign = detailed.netPnLUSD >= 0 ? '+' : '';
                 const isBigBe = pnlPoints >= 1.5;
-                const beTitle = isBigBe ? '🔒 **إغلاق بتأمين أرباح متقدم (Breakeven كبير)!** 💵' : '🛡 **إغلاق على تأمين الدخول (BREAKEVEN)!** ⚖️';
-                outcomeText = `${beTitle}\nالرمز: ${trade.symbol}\nسعر الخروج المرجعي: ${formatPrice(exitPrice)}\nالربح التقديري: +${pnlPoints.toFixed(2)} نقطة (${pnlSign}${detailed.netPnLUSD.toFixed(2)} دولار بعد السبريد التقديري)\nالرصيد المحاسبي المسجل بالنظام: ${accountUpdate.newBalance.toFixed(2)} دولار\n\nالنتيجة محسوبة من شموع Twelve Data المكتملة بعد الدخول؛ ليست تأكيد تنفيذ أو ربح من وسيطك.`;
+                const beTitle = isBigBe ? '🔒 **إغلاق بتأمين أرباح متقدم (Breakeven كبير)!** 💵' : '🛡️ **إغلاق على تأمين الدخول (BREAKEVEN)!** ⚖️';
+                outcomeText = `${beTitle}\n\n` +
+                  `🪙 **الأصل:** ${trade.symbol} (ذهب)\n` +
+                  `📊 **نوع الصفقة:** ${tradeActionText}\n` +
+                  `💵 **سعر الدخول الأصلي:** ${formatPrice(trade.entryPrice)}\n` +
+                  `🛡️ **سعر الخروج عند التأمين:** ${formatPrice(exitPrice)}\n` +
+                  `🎯 **الهدف كان:** ${formatPrice(trade.tp)}\n` +
+                  `💰 **الربح المحقق:** +${pnlPoints.toFixed(2)} نقطة (${pnlSign}${detailed.netPnLUSD.toFixed(2)} دولار)\n` +
+                  `📈 **رصيد الحساب:** ${accountUpdate.newBalance.toFixed(2)} دولار`;
               } else {
-                outcomeText = `📉 **وصل السعر المرجعي لمستوى الخروج (LOSS تقديري)**\nالرمز: ${trade.symbol}\nسعر الخروج المرجعي: ${formatPrice(exitPrice)}\nالخسارة التقديرية: ${pnlPoints.toFixed(2)} نقطة (${detailed.netPnLUSD.toFixed(2)} دولار)\nالرصيد المحاسبي المسجل بالنظام: ${accountUpdate.newBalance.toFixed(2)} دولار\n\nالنتيجة محسوبة من شموع Twelve Data المكتملة بعد الدخول؛ ليست تأكيد تنفيذ أو ربح من وسيطك.`;
+                outcomeText = `🛑 **ضرب وقف الخسارة (Stop Loss Hit)!** 🔴\n\n` +
+                  `🪙 **الأصل:** ${trade.symbol} (ذهب)\n` +
+                  `📊 **نوع الصفقة:** ${tradeActionText}\n` +
+                  `💵 **سعر الدخول الأصلي:** ${formatPrice(trade.entryPrice)}\n` +
+                  `🛑 **سعر الخروج عند الوقف:** ${formatPrice(exitPrice)}\n` +
+                  `🎯 **الهدف كان:** ${formatPrice(trade.tp)}\n` +
+                  `📉 **النتيجة:** -${pnlPoints.toFixed(2)} نقطة (${detailed.netPnLUSD.toFixed(2)} دولار)\n` +
+                  `📈 **رصيد الحساب:** ${accountUpdate.newBalance.toFixed(2)} دولار`;
               }
               await sendTelegramNotification(outcomeText);
 
@@ -480,7 +502,12 @@ async function runScalperEngine() {
                   trade.breakevenApplied = true;
                   await trade.save();
 
-                  const breakevenMsg = `🛡️ تأمين الصفقة بربح بسيط (Enhanced Breakeven) 🎯\n- الأصل: ${trade.symbol}\n- وصول السعر إلى 50% من مسار الهدف!\n- تم رفع الوقف إلى ${formatPrice(newSl)} لحجز ربح +${beBuffer} نقطة وتغطية السبريد بالكامل (صفقة خالية من المخاطرة 100%)!`;
+                  const breakevenMsg = `🛡️ **تأمين الصفقة بربح بسيط (Enhanced Breakeven)** 🎯\n\n` +
+                    `🪙 **الأصل:** ${trade.symbol} (${trade.action === 'BUY' ? 'شراء BUY' : 'بيع SELL'})\n` +
+                    `💵 **سعر الدخول:** ${formatPrice(trade.entryPrice)}\n` +
+                    `🎯 **الهدف الأصلي:** ${formatPrice(trade.tp)}\n` +
+                    `🛡️ **تم رفع الوقف إلى:** **${formatPrice(newSl)}** (+${beBuffer} نقطة فوق الدخول)\n` +
+                    `✅ وصول السعر إلى 50% من الهدف! تم تأمين الصفقة وتغطية السبريد بالكامل، الصفقة أصبحت خالية تماماً من المخاطرة (Risk-Free)!`;
                   logs.push(breakevenMsg);
                   console.log(breakevenMsg);
                   await sendTelegramNotification(breakevenMsg);
@@ -521,7 +548,13 @@ async function runScalperEngine() {
                     const lotSize = trade.suggestedLotSize || 0.01;
                     const approxCashUSD = (lockedPoints * lotSize * (matchingItem.symbol.includes('XAU') ? 100 : 1)).toFixed(2);
                     const progressPct = (progressRatio * 100).toFixed(0);
-                    const lockMsg = `${lockMsgType}\n- الأصل: ${trade.symbol}\n- تقدمت الصفقة بنسبة ${progressPct}% (+ ${currentFloatingPoints.toFixed(2)} نقطة)!\n- تم رفع الوقف إلى ${formatPrice(candidateSl)} لحجز +${lockedPoints} نقطة كاش (+${approxCashUSD}$ ربح مضمون 100%)!\n- الصفقة مستمرة بكامل حريتها لاقتناص كامل الهدف 100% 🚀`;
+                    const lockMsg = `${lockMsgType}\n\n` +
+                      `🪙 **الأصل:** ${trade.symbol} (${trade.action === 'BUY' ? 'شراء BUY' : 'بيع SELL'})\n` +
+                      `💵 **سعر الدخول:** ${formatPrice(trade.entryPrice)}\n` +
+                      `🎯 **الهدف النهائي:** ${formatPrice(trade.tp)}\n` +
+                      `🔒 **تم رفع الوقف إلى:** **${formatPrice(candidateSl)}**\n` +
+                      `💰 **أرباح محجوزة مضمونة:** +${lockedPoints} نقطة (+${approxCashUSD} دولار كاش)!\n` +
+                      `🚀 تقدمت الصفقة بنسبة ${progressPct}% (+${currentFloatingPoints.toFixed(2)} نقطة)، ومستمرة لاقتناص كامل الهدف!`;
                     logs.push(lockMsg);
                     console.log(lockMsg);
                     await sendTelegramNotification(lockMsg);
@@ -852,10 +885,21 @@ async function runScalperEngine() {
         ? '🎯 ارتداد وإعادة اختبار (EMA20 Pullback)'
         : '⚡ تقاطع زخم مع الاتجاه (RSI Crossover)';
 
-      // Send Telegram Alert
-      const macroInfo = currentEma200 ? ` | EMA200 (الصورة الكبيرة): ${formatPrice(currentEma200)}` : '';
-      const riskWarnText = posSize.hasRiskWarning ? ` (⚠️ ${posSize.riskWarningMessage || 'أعلى من المستهدف بسبب الحد الأدنى للوت 0.01'})` : '';
-      const telegramMsg = `${groqAnalysis}\n\n📊 **تفاصيل السكالبينج مع الصورة الكبيرة:**\n- الأصل: ${symbol}\n- نوع الصفقة: ${signalType === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)'}\n- نوع الدخول: ${entryTypeArabic}\n- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n- السعر المرجعي (إغلاق شمعة 5 دقائق): ${formatPrice(currentClose)}\n- وقت إغلاق الشمعة: ${formatCairoTime(sourceCandleCloseTime)} (Cairo time)\n- صلاحية الإشارة حتى: ${formatCairoTime(sourceSignalExpiresAt)}؛ تجاهلها لو وصلت بعد الموعد\n- مصدر السعر: ${fetchRes.feedSource}؛ السعر مرجعي وليس تنفيذًا مؤكدًا لدى الوسيط\n- حجم اللوت التقديري: ${posSize.lotSize.toFixed(2)} (الحساب يفترض عقد 100 أونصة؛ راجع مواصفات عقد وسيطك)\n- المخاطرة التقديرية: ${posSize.actualRiskUSD.toFixed(2)} دولار${riskWarnText}\n- وقف الخسارة SL (1.5x ATR): ${formatPrice(sl)}\n- الهدف TP (2.0x ATR): ${formatPrice(tp)}\n- 🛡️ مستوى نقل الستوب للدخول (50% Breakeven): ${formatPrice(beTargetPrice)}\n- مؤشر ATR (14): ${formatPrice(signalDetails.atr)} نقطة\n- مؤشر RSI (14): ${formatPrice(signalDetails.rsi)} | EMA20: ${formatPrice(signalDetails.ema20)} | EMA100: ${formatPrice(signalDetails.ema100)}${macroInfo}`;
+      // Format the Telegram Alert to be clear, prominent, and directly actionable for trading:
+      const actionHeader = signalType === 'BUY' ? '🟢 توصية سكالبينج: شراء (BUY)' : '🔴 توصية سكالبينج: بيع (SELL)';
+      const telegramMsg =
+        `🚨 **${actionHeader}** 🚨\n\n` +
+        `🪙 **الأصل:** ${symbol} (ذهب)\n` +
+        `💵 **سعر الدخول:** **${formatPrice(currentClose)}**\n` +
+        `🛑 **وقف الخسارة (SL):** **${formatPrice(sl)}**\n` +
+        `🎯 **هدف الأرباح (TP):** **${formatPrice(tp)}**\n` +
+        `🛡️ **تأمين الدخول (Breakeven عند 50%):** **${formatPrice(beTargetPrice)}**\n` +
+        `📦 **حجم اللوت المقترح:** ${posSize.lotSize.toFixed(2)} لوت (مخاطرة: ${posSize.actualRiskUSD.toFixed(2)} دولار)\n\n` +
+        `📌 **تفاصيل الاستراتيجية:**\n` +
+        `- نوع الدخول: ${entryTypeArabic}\n` +
+        `- تقييم الذكاء الاصطناعي (Groq AI): ${groqValidation.score}/10 (${groqValidation.reason})\n` +
+        `- مؤشر RSI: ${formatPrice(signalDetails.rsi)} | ATR: ${formatPrice(signalDetails.atr)} نقطة\n` +
+        `- إغلاق شمعة 5 دقائق: ${formatCairoTime(sourceCandleCloseTime)} بتوقيت القاهرة`;
 
       if (Date.now() - latestClosedCandle.closeTime > MAX_ENTRY_SIGNAL_AGE_MS) {
         persistedTrade.status = 'ARCHIVED';
