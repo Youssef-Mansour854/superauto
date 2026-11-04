@@ -200,16 +200,20 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
     return defaultFallback;
   }
 
-  const systemPrompt = `أنت خبير تداول كمي فائق الدقة متخصص في سكالبينج الذهب (XAU/USD).
-مهمتك تدقيق جودة إشارات السكالبينج (Gatekeeper) بصرامة بالغة لمنع فتح صفقات في قمم/قيعان أو في مناطق تذبذب كاذب.
+  const systemPrompt = `أنت خبير تداول كمي ومحلل فني دقيق متخصص في سكالبينج الذهب (XAU/USD).
+مهمتك تقييم جودة إشارات السكالبينج بموضوعية واحترافية متوازنة:
+- الصفقات المتوافقة مع الاتجاه والصورة الكبيرة (EMA200) مع زخم RSI صحي وإعادة اختبار ناجحة للمتوسط EMA20 هي صفقات ممتازة تستحق درجات عالية (7.5 إلى 9.5).
+- الصفقات المعاكسة للاتجاه العام أو في مناطق تشبع خطرة أو كسر كاذب طفيف تستحق درجات منخفضة (أقل من 6.0).
 أجب فقط بصيغة JSON بدون أي نصوص قبلها أو بعدها بالشكل التالي:
 {
   "approved": boolean,
   "score": number,
-  "reason": "سبب التقييم بالعربية في جملة واحدة"
+  "reason": "سبب التقييم بالعربية في جملة واحدة مختصرة ومقنعة"
 }`;
 
-  const mondayInstruction = `\n⚠️ ملاحظة خاصة: كن فائق الصرامة والتدقيق لمخاطر التذبذب العرضي وضعف السيولة، ولا توافق إلا إذا كانت الإشارة مثالية بنسبة 100% (الموافقة تتطلب تقييم 7.5 أو أعلى دائماً).`;
+  const mondayInstruction = data.isMonday
+    ? `\n⚠️ ملاحظة خاصة بيوم الاثنين: افتتاح الأسبوع يتطلب تدقيقاً إضافياً لمخاطر ضعف السيولة وفجوات الافتتاح.`
+    : '';
 
   // جلب القواعد السلبية المستفادة من الذكاء الاصطناعي لو المفتاح مفعل
   let aiMemoryRulesSection = '';
@@ -219,7 +223,7 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
       if (activeRules && activeRules.length > 0) {
         aiMemoryRulesSection = `\n📌 قواعد صارمة مستفادة من تحليل صفقات البوت السابقة لمنع تكرار الخسائر:\n` +
           activeRules.map((r, i) => `${i + 1}. ${r}`).join('\n') +
-          `\n⚠️ إذا خالفت هذه الإشارة أي قاعدة من القواعد السابقة، ارفض الصفقة فوراً (Score < 7.5).\n`;
+          `\n⚠️ إذا خالفت هذه الإشارة أي قاعدة من القواعد السابقة، ارفض الصفقة فوراً (Score < 7.0).\n`;
       }
     } catch (e) {
       // تجاهل الخطأ بأمان تام والاستمرار
@@ -228,19 +232,24 @@ export async function validateTradeConfluenceWithGroq(data: TradeValidationData)
 
   const userPrompt = `
 قم بتقييم إشارة السكالبينج التالية لـ ${data.symbol}:
-- نوع الصفقة: ${data.action} (${data.triggerReason === 'PULLBACK' ? 'ارتداد EMA20' : 'تقاطع زخم RSI'})
+- نوع الصفقة: ${data.action} (${data.triggerReason === 'PULLBACK' ? 'ارتداد وإعادة اختبار EMA20' : 'تقاطع زخم RSI'})
 - السعر الحالي: ${formatPrice(data.entryPrice)}
-- Stop Loss: ${formatPrice(data.sl)} | Take Profit: ${formatPrice(data.tp)}
-- RSI (14): ${formatPrice(data.rsi)}
-- EMA 20: ${formatPrice(data.ema20)} | EMA 100: ${formatPrice(data.ema100)}${data.ema200 !== undefined ? ` | EMA 200 (الصورة الكبيرة): ${formatPrice(data.ema200)}` : ''}
-- ATR (14): $${formatPrice(data.atr)}${mondayInstruction}${aiMemoryRulesSection}
+- الوقف والهدف (معيار الاستراتيجية المعتمد: SL = 1.5x ATR، TP = 2.0x ATR بنسبة عائد إلى مخاطرة 1:1.33):
+  * Stop Loss: ${formatPrice(data.sl)} (مسافة 1.5x ATR لحماية الصفقة من تذبذب الذهب العادي)
+  * Take Profit: ${formatPrice(data.tp)} (مسافة 2.0x ATR)
+- مؤشر RSI (14): ${formatPrice(data.rsi)}
+- المتوسطات المتحركة:
+  * EMA 20: ${formatPrice(data.ema20)} | EMA 100: ${formatPrice(data.ema100)}${data.ema200 !== undefined ? ` | EMA 200 (الصورة الكبيرة للاتجاه العام): ${formatPrice(data.ema200)}` : ''}
+- معدل ATR (14): ${formatPrice(data.atr)}${mondayInstruction}${aiMemoryRulesSection}
 
-شروط التقييم الصارم:
-- اعطِ درجة من 1 إلى 10 (الموافقة تتطلب تقييم صارم 7.5 أو أعلى).
-- إذا كانت الصفقة BUY و RSI > 65، أو السعر متضخم وبعيد عن EMA20 -> ارفض (Score < 7.5).
-- إذا كانت الصفقة SELL و RSI < 35، أو السعر منخفض جداً وبعيد عن EMA20 -> ارفض (Score < 7.5).
-- تحقق من الصورة الكبيرة (EMA200): في الشراء يجب أن يكون السعر أعلى من EMA200 (اتجاه صاعد)، وفي البيع أدنى من EMA200 (اتجاه هابط).
-- إذا كانت الشموع متوافقة مع الاتجاه والصورة الكبيرة والـ RSI متزن ومسافة الـ SL مناسبة -> وافق.
+قواعد التقييم العادل والدقيق:
+1. التوافق مع الصورة الكبيرة (EMA200):
+   - في الشراء: إذا كان السعر فوق EMA200 (اتجاه صاعد) والدخول من ارتداد EMA20 مع RSI بين 48 و 64 -> صفقة ممتازة (Score: 8.0 - 9.5).
+   - في البيع: إذا كان السعر تحت EMA200 (اتجاه هابط) والدخول من ارتداد EMA20 مع RSI بين 36 و 52 -> صفقة ممتازة (Score: 8.0 - 9.5).
+2. الحالات الخطرة (تستحق الرفض ودرجة أقل من 6.0):
+   - تداول عكس الاتجاه العام (مثلاً إشارة SELL بينما السعر فوق EMA200، أو BUY بينما السعر تحت EMA200).
+   - تشبع شرائي مفرط (BUY مع RSI > 66) أو تشبع بيعي مفرط (SELL مع RSI < 34).
+   - الكسر الطفيف المشكوك فيه (Fakeout) بالقرب من EMA100 دون تأكيد.
 أخرج كود JSON فقط.
 `;
 
