@@ -87,87 +87,19 @@ export async function GET(req: Request) {
   }
 }
 
-export async function POST(req: Request) {
+export async function DELETE() {
   try {
     await connectToDatabase();
-    const historyTrades = await TradeHistory.find().sort({ closedAt: -1 }).limit(100);
-
-    let backfilled = 0;
-    for (const h of historyTrades) {
-      const tradeId = h.tradeId || h._id.toString();
-      const existing = await DetailedTradeLog.findOne({ tradeId });
-      if (!existing) {
-        const entryTime = h.entryTimestamp || h.closedAt || new Date();
-        const closedTime = h.closedAt || new Date();
-        const durationMins = Math.max(1, Math.round((closedTime.getTime() - entryTime.getTime()) / 60000));
-        const beTarget = h.action === 'BUY'
-          ? h.entryPrice + 0.5 * (h.tp - h.entryPrice)
-          : h.entryPrice - 0.5 * (h.entryPrice - h.tp);
-
-        const rr = Math.abs(h.entryPrice - h.sl) > 0
-          ? Number((Math.abs(h.tp - h.entryPrice) / Math.abs(h.entryPrice - h.sl)).toFixed(2))
-          : 1.33;
-
-        await DetailedTradeLog.create({
-          tradeId,
-          symbol: h.symbol,
-          action: h.action,
-          tradeType: h.tradeType || 'SCALP',
-          status: h.status,
-          entryTimestamp: entryTime,
-          entryCairoTime: formatCairoTime(entryTime),
-          sourceCandleCloseTime: h.sourceCandleCloseTime || entryTime,
-          sourceCandleCloseCairo: formatCairoTime(h.sourceCandleCloseTime || entryTime),
-          closedAt: closedTime,
-          closedCairoTime: formatCairoTime(closedTime),
-          durationMinutes: durationMins,
-          entryPrice: h.entryPrice,
-          exitPrice: h.exitPrice,
-          slPrice: h.sl,
-          tpPrice: h.tp,
-          breakevenTriggerPrice: beTarget,
-          exitReason: h.status === 'WIN' ? 'TAKE_PROFIT' : (h.status === 'BREAKEVEN' ? 'BREAKEVEN' : 'SOFT_STOP'),
-          lotSize: h.suggestedLotSize || 0.01,
-          accountBalanceAtEntry: h.balanceAfterTrade ? h.balanceAfterTrade - (h.netPnLUSD || 0) : 100,
-          riskAmountUSD: h.atr ? Number((1.5 * h.atr).toFixed(2)) : 3.0,
-          riskPercent: 2.0,
-          potentialProfitUSD: h.atr ? Number((2.0 * h.atr).toFixed(2)) : 4.0,
-          riskRewardRatio: rr,
-          pnlPoints: h.pnlPoints,
-          grossPnLUSD: h.grossPnLUSD,
-          tradingFeeUSD: h.tradingFeeUSD,
-          netPnLUSD: h.netPnLUSD,
-          balanceAfterTrade: h.balanceAfterTrade,
-          triggerReason: h.triggerReason || 'EMA20_PULLBACK',
-          rsi: h.rsi || 50,
-          ema20: h.ema20 || h.entryPrice,
-          ema100: h.ema100 || h.entryPrice,
-          ema200: h.ema200,
-          atr: h.atr || 2.0,
-          trendAlignment: 'ALIGNED_WITH_MACRO',
-          exitRsi: h.exitRsi,
-          exitEma20: h.exitEma20,
-          exitEma100: h.exitEma100,
-          exitAtr: h.exitAtr,
-          groqScore: h.groqScore,
-          groqReason: h.groqReason,
-          groqAnalysis: h.groqAnalysis,
-          feedSource: h.feedSource || 'TWELVEDATA XAU/USD',
-          telegramSent: true
-        });
-        backfilled++;
-      }
-    }
-
+    const result = await DetailedTradeLog.deleteMany({});
     return NextResponse.json({
       success: true,
-      message: `تم مزامنة واستيراد ${backfilled} صفقة تاريخية في السجل المفصل بنجاح!`,
-      backfilledCount: backfilled
+      message: `تم مسح السجل الجديد بالكامل بنجاح (${result.deletedCount} صفقة قديمة تم تفريغها). السجل الآن فارغ 100% وجاهز لاستقبال أول صفقة تبدأ بعد هذه المحادثة!`,
+      deletedCount: result.deletedCount
     }, { status: 200 });
   } catch (error: any) {
     return NextResponse.json({
       success: false,
-      error: error?.message || 'Failed to backfill trades'
+      error: error?.message || 'Failed to clear journal'
     }, { status: 500 });
   }
 }
