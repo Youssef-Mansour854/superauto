@@ -64,6 +64,10 @@ export interface IDetailedTradeLog extends Document {
   exitAtr?: number;
   highestHighDuringTrade?: number;
   lowestLowDuringTrade?: number;
+  maxDrawdownPoints?: number;
+  maxFavorablePoints?: number;
+  outcomeReasonArabic?: string;
+  postTradeLesson?: string;
 
   // Groq AI Intelligence & Reasoning
   groqScore?: number;
@@ -143,6 +147,10 @@ const DetailedTradeLogSchema: Schema = new Schema<IDetailedTradeLog>({
   exitAtr: { type: Number },
   highestHighDuringTrade: { type: Number },
   lowestLowDuringTrade: { type: Number },
+  maxDrawdownPoints: { type: Number },
+  maxFavorablePoints: { type: Number },
+  outcomeReasonArabic: { type: String },
+  postTradeLesson: { type: String },
 
   // Groq AI Intelligence & Reasoning
   groqScore: { type: Number },

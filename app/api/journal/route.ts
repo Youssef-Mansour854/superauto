@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { connectToDatabase } from '@/lib/mongodb';
 import DetailedTradeLog from '@/models/DetailedTradeLog';
+import { diagnoseTradeOutcome } from '@/lib/tradeDiagnosis';
 import TradeHistory from '@/models/TradeHistory';
 
 export const dynamic = 'force-dynamic';
@@ -101,5 +102,50 @@ export async function DELETE() {
       success: false,
       error: error?.message || 'Failed to clear journal'
     }, { status: 500 });
+  }
+}
+
+export async function PATCH() {
+  try {
+    await connectToDatabase();
+    const trades = await DetailedTradeLog.find();
+    let updatedCount = 0;
+
+    for (const t of trades) {
+      const exitReasonVal = (t.exitReason as any) || (t.status === 'WIN' ? 'TAKE_PROFIT' : (t.status === 'BREAKEVEN' ? 'BREAKEVEN' : 'HARD_STOP'));
+      const diag = diagnoseTradeOutcome({
+        action: t.action,
+        status: t.status as any,
+        exitReason: exitReasonVal,
+        entryPrice: t.entryPrice,
+        exitPrice: t.exitPrice || t.entryPrice,
+        slPrice: t.slPrice,
+        tpPrice: t.tpPrice,
+        pnlPoints: t.pnlPoints || 0,
+        netPnLUSD: t.netPnLUSD || 0,
+        durationMinutes: t.durationMinutes || 20,
+        highestHighDuringTrade: t.highestHighDuringTrade || t.entryPrice,
+        lowestLowDuringTrade: t.lowestLowDuringTrade || t.entryPrice,
+        rsi: t.rsi,
+        exitRsi: t.exitRsi,
+        sessionName: t.sessionName || 'GLOBAL',
+        triggerReason: t.triggerReason
+      });
+
+      t.outcomeReasonArabic = diag.outcomeReasonArabic;
+      t.postTradeLesson = diag.postTradeLesson;
+      t.maxDrawdownPoints = diag.maxDrawdownPoints;
+      t.maxFavorablePoints = diag.maxFavorablePoints;
+      await t.save();
+      updatedCount++;
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `تم تشخيص وتحديث أسباب الربح والخسارة لـ ${updatedCount} صفقة في السجل بنجاح!`,
+      updatedCount
+    }, { status: 200 });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error?.message }, { status: 500 });
   }
 }

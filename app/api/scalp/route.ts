@@ -9,6 +9,7 @@ import { fetchTwelveData5mKlines } from '@/lib/twelvedata';
 import { calculateScalpIndicators, formatPrice } from '@/lib/indicators';
 import { validateTradeConfluenceWithGroq } from '@/lib/groq';
 import { sendTelegramNotification } from '@/lib/telegram';
+import { diagnoseTradeOutcome } from '@/lib/tradeDiagnosis';
 import {
   calculatePositionSize,
   calculateDetailedPnL,
@@ -417,10 +418,30 @@ async function runScalperEngine() {
               });
 
               // Update the dedicated DetailedTradeLog collection
+              let diagnosis: any = null;
               try {
                 const durationMins = Math.max(1, Math.round((closedAt.getTime() - new Date(trade.timestamp).getTime()) / 60000));
                 const exitReasonVal: 'TAKE_PROFIT' | 'SOFT_STOP' | 'HARD_STOP' | 'BREAKEVEN' =
                   newStatus === 'WIN' ? 'TAKE_PROFIT' : (isBe ? 'BREAKEVEN' : (candleHigh >= (trade.action === 'BUY' ? trade.entryPrice - atrVal * hardSlMult : trade.entryPrice + atrVal * hardSlMult) ? 'HARD_STOP' : 'SOFT_STOP'));
+
+                diagnosis = diagnoseTradeOutcome({
+                  action: trade.action,
+                  status: newStatus,
+                  exitReason: exitReasonVal,
+                  entryPrice: trade.entryPrice,
+                  exitPrice,
+                  slPrice: trade.sl,
+                  tpPrice: trade.tp,
+                  pnlPoints: Number(pnlPoints.toFixed(4)),
+                  netPnLUSD: detailed.netPnLUSD,
+                  durationMinutes: durationMins,
+                  highestHighDuringTrade: highestHighSinceEntry,
+                  lowestLowDuringTrade: lowestLowSinceEntry,
+                  rsi: trade.rsi,
+                  exitRsi: indExit ? indExit.currentRsi : undefined,
+                  sessionName: getSessionName(new Date()),
+                  triggerReason: trade.triggerReason
+                });
 
                 await DetailedTradeLog.findOneAndUpdate(
                   { tradeId: trade._id.toString() },
@@ -432,6 +453,10 @@ async function runScalperEngine() {
                       closedCairoTime: formatCairoTime(closedAt),
                       durationMinutes: durationMins,
                       exitReason: exitReasonVal,
+                      outcomeReasonArabic: diagnosis.outcomeReasonArabic,
+                      postTradeLesson: diagnosis.postTradeLesson,
+                      maxDrawdownPoints: diagnosis.maxDrawdownPoints,
+                      maxFavorablePoints: diagnosis.maxFavorablePoints,
                       pnlPoints: Number(pnlPoints.toFixed(4)),
                       grossPnLUSD: detailed.grossPnLUSD,
                       tradingFeeUSD: detailed.tradingFeeUSD,
@@ -467,6 +492,8 @@ async function runScalperEngine() {
 
               let outcomeText = '';
               const tradeActionText = trade.action === 'BUY' ? '🟢 شراء (BUY)' : '🔴 بيع (SELL)';
+              const diagText = diagnosis?.outcomeReasonArabic ? `\n\n🔍 **التحليل الجنائي للنتيجة:**\n${diagnosis.outcomeReasonArabic}` : '';
+
               if (newStatus === 'WIN') {
                 outcomeText = `🎯 **تم تحقيق الهدف بنجاح (Take Profit Hit)!** 🟢\n\n` +
                   `🪙 **الأصل:** ${trade.symbol} (ذهب)\n` +
@@ -475,7 +502,8 @@ async function runScalperEngine() {
                   `🎯 **سعر الخروج (الهدف):** ${formatPrice(exitPrice)}\n` +
                   `🛑 **وقف الخسارة كان:** ${formatPrice(trade.sl)}\n` +
                   `💰 **الربح المحقق:** +${pnlPoints.toFixed(2)} نقطة (+${detailed.netPnLUSD.toFixed(2)} دولار)\n` +
-                  `📈 **رصيد الحساب:** ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                  `📈 **رصيد الحساب:** ${accountUpdate.newBalance.toFixed(2)} دولار` +
+                  diagText;
               } else if (newStatus === 'BREAKEVEN') {
                 const pnlSign = detailed.netPnLUSD >= 0 ? '+' : '';
                 const isBigBe = pnlPoints >= 1.5;
@@ -487,7 +515,8 @@ async function runScalperEngine() {
                   `🛡️ **سعر الخروج عند التأمين:** ${formatPrice(exitPrice)}\n` +
                   `🎯 **الهدف كان:** ${formatPrice(trade.tp)}\n` +
                   `💰 **الربح المحقق:** +${pnlPoints.toFixed(2)} نقطة (${pnlSign}${detailed.netPnLUSD.toFixed(2)} دولار)\n` +
-                  `📈 **رصيد الحساب:** ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                  `📈 **رصيد الحساب:** ${accountUpdate.newBalance.toFixed(2)} دولار` +
+                  diagText;
               } else {
                 outcomeText = `🛑 **ضرب وقف الخسارة (Stop Loss Hit)!** 🔴\n\n` +
                   `🪙 **الأصل:** ${trade.symbol} (ذهب)\n` +
@@ -496,7 +525,8 @@ async function runScalperEngine() {
                   `🛑 **سعر الخروج عند الوقف:** ${formatPrice(exitPrice)}\n` +
                   `🎯 **الهدف كان:** ${formatPrice(trade.tp)}\n` +
                   `📉 **النتيجة:** -${pnlPoints.toFixed(2)} نقطة (${detailed.netPnLUSD.toFixed(2)} دولار)\n` +
-                  `📈 **رصيد الحساب:** ${accountUpdate.newBalance.toFixed(2)} دولار`;
+                  `📈 **رصيد الحساب:** ${accountUpdate.newBalance.toFixed(2)} دولار` +
+                  diagText;
               }
               await sendTelegramNotification(outcomeText);
 
@@ -688,6 +718,23 @@ async function runScalperEngine() {
 
                   try {
                     const durationMins = Math.max(1, Math.round((closedAt.getTime() - new Date(trade.timestamp).getTime()) / 60000));
+                    const diagTimeout = diagnoseTradeOutcome({
+                      action: trade.action,
+                      status: 'LOSS',
+                      exitReason: 'TIMEOUT',
+                      entryPrice: trade.entryPrice,
+                      exitPrice: currentPrice,
+                      slPrice: trade.sl,
+                      tpPrice: trade.tp,
+                      pnlPoints: Number(pnlPoints.toFixed(4)),
+                      netPnLUSD: detailed.netPnLUSD,
+                      durationMinutes: durationMins,
+                      rsi: trade.rsi,
+                      exitRsi: indExit ? indExit.currentRsi : undefined,
+                      sessionName: getSessionName(new Date()),
+                      triggerReason: trade.triggerReason
+                    });
+
                     await DetailedTradeLog.findOneAndUpdate(
                       { tradeId: trade._id.toString() },
                       {
@@ -698,6 +745,10 @@ async function runScalperEngine() {
                           closedCairoTime: formatCairoTime(closedAt),
                           durationMinutes: durationMins,
                           exitReason: 'TIMEOUT',
+                          outcomeReasonArabic: diagTimeout.outcomeReasonArabic,
+                          postTradeLesson: diagTimeout.postTradeLesson,
+                          maxDrawdownPoints: diagTimeout.maxDrawdownPoints,
+                          maxFavorablePoints: diagTimeout.maxFavorablePoints,
                           pnlPoints: Number(pnlPoints.toFixed(4)),
                           grossPnLUSD: detailed.grossPnLUSD,
                           tradingFeeUSD: detailed.tradingFeeUSD,
