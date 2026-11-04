@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { connectToDatabase } from '@/lib/mongodb';
 import Trade from '@/models/Trade';
 import TradeHistory from '@/models/TradeHistory';
+import DetailedTradeLog from '@/models/DetailedTradeLog';
 import type { Candle } from '@/lib/binance';
 import { fetchTwelveData5mKlines } from '@/lib/twelvedata';
 import { calculateScalpIndicators, formatPrice } from '@/lib/indicators';
@@ -148,6 +149,15 @@ function formatCairoTime(date: Date): string {
     dateStyle: 'short',
     timeStyle: 'short'
   }).format(date);
+}
+
+function getSessionName(date: Date): string {
+  const utcHour = date.getUTCHours();
+  if (utcHour >= 13 && utcHour < 16) return 'LONDON_NY_OVERLAP';
+  if (utcHour >= 8 && utcHour < 16) return 'LONDON';
+  if (utcHour >= 13 && utcHour < 21) return 'NEW_YORK';
+  if (utcHour >= 0 && utcHour < 8) return 'ASIAN';
+  return 'PACIFIC';
 }
 
 async function getRiskCircuitBreakerReason(): Promise<string | null> {
@@ -381,6 +391,11 @@ async function runScalperEngine() {
                 tp: trade.tp,
                 status: newStatus,
                 suggestedLotSize: lotSize,
+                triggerReason: trade.triggerReason,
+                groqScore: trade.groqScore,
+                groqReason: trade.groqReason,
+                riskUSD: trade.riskUSD,
+                potentialProfitUSD: trade.potentialProfitUSD,
                 pnlPoints: Number(pnlPoints.toFixed(4)),
                 grossPnLUSD: detailed.grossPnLUSD,
                 tradingFeeUSD: detailed.tradingFeeUSD,
@@ -400,6 +415,44 @@ async function runScalperEngine() {
                 entryTimestamp: trade.timestamp,
                 closedAt
               });
+
+              // Update the dedicated DetailedTradeLog collection
+              try {
+                const durationMins = Math.max(1, Math.round((closedAt.getTime() - new Date(trade.timestamp).getTime()) / 60000));
+                const exitReasonVal: 'TAKE_PROFIT' | 'SOFT_STOP' | 'HARD_STOP' | 'BREAKEVEN' =
+                  newStatus === 'WIN' ? 'TAKE_PROFIT' : (isBe ? 'BREAKEVEN' : (candleHigh >= (trade.action === 'BUY' ? trade.entryPrice - atrVal * hardSlMult : trade.entryPrice + atrVal * hardSlMult) ? 'HARD_STOP' : 'SOFT_STOP'));
+
+                await DetailedTradeLog.findOneAndUpdate(
+                  { tradeId: trade._id.toString() },
+                  {
+                    $set: {
+                      status: newStatus,
+                      exitPrice,
+                      closedAt,
+                      closedCairoTime: formatCairoTime(closedAt),
+                      durationMinutes: durationMins,
+                      exitReason: exitReasonVal,
+                      pnlPoints: Number(pnlPoints.toFixed(4)),
+                      grossPnLUSD: detailed.grossPnLUSD,
+                      tradingFeeUSD: detailed.tradingFeeUSD,
+                      spreadCostUSD: detailed.spreadCostUSD,
+                      slippageCostUSD: detailed.slippageCostUSD,
+                      commissionUSD: detailed.commissionUSD,
+                      netPnLUSD: detailed.netPnLUSD,
+                      balanceAfterTrade: accountUpdate.newBalance,
+                      exitRsi: indExit ? indExit.currentRsi : undefined,
+                      exitEma20: indExit ? indExit.currentEma20 : undefined,
+                      exitEma100: indExit ? indExit.currentEma100 : undefined,
+                      exitAtr: indExit ? indExit.currentAtr : undefined,
+                      highestHighDuringTrade: highestHighSinceEntry,
+                      lowestLowDuringTrade: lowestLowSinceEntry
+                    }
+                  },
+                  { upsert: false }
+                );
+              } catch (detErr: any) {
+                console.warn('DetailedTradeLog update error:', detErr?.message || detErr);
+              }
 
               // Update active trade status to ARCHIVED so it is removed from pending list
               trade.status = 'ARCHIVED';
@@ -608,6 +661,11 @@ async function runScalperEngine() {
                     tp: trade.tp,
                     status: 'LOSS',
                     suggestedLotSize: lotSize,
+                    triggerReason: trade.triggerReason,
+                    groqScore: trade.groqScore,
+                    groqReason: trade.groqReason,
+                    riskUSD: trade.riskUSD,
+                    potentialProfitUSD: trade.potentialProfitUSD,
                     pnlPoints: Number(pnlPoints.toFixed(4)),
                     grossPnLUSD: detailed.grossPnLUSD,
                     tradingFeeUSD: detailed.tradingFeeUSD,
@@ -627,6 +685,33 @@ async function runScalperEngine() {
                     entryTimestamp: trade.timestamp,
                     closedAt
                   });
+
+                  try {
+                    const durationMins = Math.max(1, Math.round((closedAt.getTime() - new Date(trade.timestamp).getTime()) / 60000));
+                    await DetailedTradeLog.findOneAndUpdate(
+                      { tradeId: trade._id.toString() },
+                      {
+                        $set: {
+                          status: 'LOSS',
+                          exitPrice: currentPrice,
+                          closedAt,
+                          closedCairoTime: formatCairoTime(closedAt),
+                          durationMinutes: durationMins,
+                          exitReason: 'TIMEOUT',
+                          pnlPoints: Number(pnlPoints.toFixed(4)),
+                          grossPnLUSD: detailed.grossPnLUSD,
+                          tradingFeeUSD: detailed.tradingFeeUSD,
+                          netPnLUSD: detailed.netPnLUSD,
+                          balanceAfterTrade: accountUpdate.newBalance,
+                          exitRsi: indExit ? indExit.currentRsi : undefined,
+                          exitEma20: indExit ? indExit.currentEma20 : undefined,
+                          exitEma100: indExit ? indExit.currentEma100 : undefined,
+                          exitAtr: indExit ? indExit.currentAtr : undefined
+                        }
+                      },
+                      { upsert: false }
+                    );
+                  } catch {}
 
                   trade.status = 'ARCHIVED';
                   trade.exitPrice = currentPrice;
@@ -859,23 +944,6 @@ async function runScalperEngine() {
 
       const groqAnalysis = `إشارة ${signalType} على الذهب بناءً على شمعة 5 دقائق مكتملة.`;
 
-      // Save to MongoDB with tradeType: 'SCALP'
-      let persistedTrade: any = null;
-      try {
-        persistedTrade = new Trade({
-          ...signalDetails,
-          tradeType: 'SCALP',
-          groqAnalysis,
-          status: 'ALERT_SENT',
-          timestamp: new Date()
-        });
-        await persistedTrade.save();
-      } catch (saveErr: any) {
-        logs.push(`Database log error for ${symbol}: ${saveErr?.message || saveErr}`);
-        const duplicate = saveErr?.code === 11000;
-        return { symbol, signalTriggered: false, skipped: duplicate, error: duplicate ? undefined : 'Could not persist signal; alert not sent.' };
-      }
-
       // 50% Breakeven Target level for immediate trader notification
       const beTargetPrice = signalType === 'BUY'
         ? currentClose + 0.5 * (tp - currentClose)
@@ -884,6 +952,79 @@ async function runScalperEngine() {
       const entryTypeArabic = triggerReason === 'PULLBACK'
         ? '🎯 ارتداد وإعادة اختبار (EMA20 Pullback)'
         : '⚡ تقاطع زخم مع الاتجاه (RSI Crossover)';
+
+      // Save to MongoDB with tradeType: 'SCALP'
+      let persistedTrade: any = null;
+      try {
+        persistedTrade = new Trade({
+          ...signalDetails,
+          tradeType: 'SCALP',
+          triggerReason: triggerReason || 'CROSSOVER',
+          groqScore: groqValidation.score,
+          groqReason: groqValidation.reason,
+          riskUSD: posSize.actualRiskUSD,
+          potentialProfitUSD: Number((Math.abs(tp - currentClose) * spec.contractSize * posSize.lotSize).toFixed(2)),
+          groqAnalysis,
+          status: 'ALERT_SENT',
+          timestamp: new Date()
+        });
+        await persistedTrade.save();
+
+        // 📝 Save complete forensic details into the dedicated DetailedTradeLog collection
+        try {
+          const rrRatio = Number((Math.abs(tp - currentClose) / Math.abs(currentClose - sl)).toFixed(2));
+          const trendAlign: 'ALIGNED_WITH_MACRO' | 'COUNTER_TREND' = currentEma200
+            ? (signalType === 'BUY' ? (currentClose > currentEma200 ? 'ALIGNED_WITH_MACRO' : 'COUNTER_TREND') : (currentClose < currentEma200 ? 'ALIGNED_WITH_MACRO' : 'COUNTER_TREND'))
+            : 'ALIGNED_WITH_MACRO';
+
+          await DetailedTradeLog.create({
+            tradeId: persistedTrade._id.toString(),
+            symbol,
+            action: signalType,
+            tradeType: 'SCALP',
+            status: 'ALERT_SENT',
+            entryTimestamp: new Date(),
+            entryCairoTime: formatCairoTime(new Date()),
+            sourceCandleCloseTime,
+            sourceCandleCloseCairo: formatCairoTime(sourceCandleCloseTime),
+            entryPrice: currentClose,
+            slPrice: sl,
+            tpPrice: tp,
+            breakevenTriggerPrice: beTargetPrice,
+            lotSize: posSize.lotSize,
+            accountBalanceAtEntry: currentLiveBal,
+            riskAmountUSD: posSize.actualRiskUSD,
+            riskPercent: posSize.actualRiskPercent,
+            potentialProfitUSD: Number((Math.abs(tp - currentClose) * spec.contractSize * posSize.lotSize).toFixed(2)),
+            riskRewardRatio: rrRatio,
+            triggerReason: triggerReason || 'CROSSOVER',
+            candleOpen: latestClosedCandle.open,
+            candleHigh: latestClosedCandle.high,
+            candleLow: latestClosedCandle.low,
+            candleClose: latestClosedCandle.close,
+            rsi: currentRsi,
+            prevRsi,
+            ema20: currentEma20,
+            ema100: currentEma100,
+            ema200: currentEma200,
+            atr: currentAtr,
+            sessionName: getSessionName(new Date()),
+            trendAlignment: trendAlign,
+            groqScore: groqValidation.score,
+            groqApproved: groqValidation.approved,
+            groqReason: groqValidation.reason,
+            groqAnalysis,
+            feedSource: fetchRes.feedSource,
+            telegramSent: false
+          });
+        } catch (detailSaveErr: any) {
+          console.warn('DetailedTradeLog initial create warning:', detailSaveErr?.message || detailSaveErr);
+        }
+      } catch (saveErr: any) {
+        logs.push(`Database log error for ${symbol}: ${saveErr?.message || saveErr}`);
+        const duplicate = saveErr?.code === 11000;
+        return { symbol, signalTriggered: false, skipped: duplicate, error: duplicate ? undefined : 'Could not persist signal; alert not sent.' };
+      }
 
       // Format the Telegram Alert to be clear, prominent, and contain all strategy & AI details:
       const actionHeader = signalType === 'BUY' ? '🟢 توصية سكالبينج: شراء (BUY)' : '🔴 توصية سكالبينج: بيع (SELL)';
@@ -921,9 +1062,22 @@ async function runScalperEngine() {
         persistedTrade.status = 'ARCHIVED';
         persistedTrade.closedAt = new Date();
         await persistedTrade.save();
+        try {
+          await DetailedTradeLog.updateOne(
+            { tradeId: persistedTrade._id.toString() },
+            { $set: { telegramSent: false, status: 'LOSS', notes: 'Telegram dispatch failed; trade archived' } }
+          );
+        } catch {}
         logs.push(`[${symbol}] Telegram delivery failed; unsent signal was archived.`);
         return { symbol, signalTriggered: false, skipped: true, reason: 'Telegram delivery failed.' };
       }
+
+      try {
+        await DetailedTradeLog.updateOne(
+          { tradeId: persistedTrade._id.toString() },
+          { $set: { telegramSent: true, telegramText: telegramMsg, status: 'OPEN' } }
+        );
+      } catch {}
 
       return { symbol, signalTriggered: true, signal: signalDetails, groqAnalysis, groqValidation };
 

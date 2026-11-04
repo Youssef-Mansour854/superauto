@@ -11,6 +11,11 @@ export interface ITradeHistory extends Document {
   tp: number;
   status: 'WIN' | 'LOSS' | 'BREAKEVEN';
   suggestedLotSize?: number;
+  triggerReason?: string;
+  groqScore?: number;
+  groqReason?: string;
+  riskUSD?: number;
+  potentialProfitUSD?: number;
   pnlPoints?: number;
   pnlUSD?: number;
   grossPnLUSD?: number;
@@ -48,6 +53,11 @@ const TradeHistorySchema: Schema = new Schema<ITradeHistory>({
   tp: { type: Number, required: true },
   status: { type: String, enum: ['WIN', 'LOSS', 'BREAKEVEN'], required: true, index: true },
   suggestedLotSize: { type: Number },
+  triggerReason: { type: String },
+  groqScore: { type: Number },
+  groqReason: { type: String },
+  riskUSD: { type: Number },
+  potentialProfitUSD: { type: Number },
   pnlPoints: { type: Number },
   pnlUSD: { type: Number },
   grossPnLUSD: { type: Number },
