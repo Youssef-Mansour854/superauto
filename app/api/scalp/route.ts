@@ -1078,9 +1078,12 @@ async function runScalperEngine() {
       }
 
       // Format the Telegram Alert to be clear, prominent, and contain all strategy & AI details:
-      const actionHeader = signalType === 'BUY' ? '🟢 توصية سكالبينج: شراء (BUY)' : '🔴 توصية سكالبينج: بيع (SELL)';
+      const actionHeader = signalType === 'BUY' ? '🟢 توصية سكالبينج: شراء (BUY)' : '🔴 بيع (SELL)';
       const macroInfo = currentEma200 ? ` | EMA200 (الصورة الكبيرة): ${formatPrice(currentEma200)}` : '';
       const riskWarnText = posSize.hasRiskWarning ? `\n- ⚠️ **تنبيه إدارة المخاطر:** ${posSize.riskWarningMessage || 'المخاطرة الفعلية أعلى من 2% بسبب الحد الأدنى للوت 0.01'}` : '';
+
+      const potentialProfitUSD = Number((Math.abs(tp - currentClose) * spec.contractSize * posSize.lotSize).toFixed(2));
+      const halfProfitUSD = Number((potentialProfitUSD / 2).toFixed(2));
 
       const telegramMsg =
         `🚨 **${actionHeader}** 🚨\n\n` +
@@ -1090,6 +1093,12 @@ async function runScalperEngine() {
         `🎯 **هدف الأرباح (TP):** **${formatPrice(tp)}**\n` +
         `🛡️ **تأمين الدخول (Breakeven عند 50%):** **${formatPrice(beTargetPrice)}**\n` +
         `📦 **حجم اللوت المقترح:** ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: ${posSize.actualRiskUSD.toFixed(2)} دولار)\n\n` +
+        `💰 **خطة حجز الأرباح وتأمين الصفقة (خطوة بخطوة):**\n` +
+        `1️⃣ **المستوى الأول - عند الوصول لسعر ${formatPrice(beTargetPrice)} (تحقيق 50%):**\n` +
+        `   🛡️ انقل وقف الخسارة (SL) فوراً لسعر الدخول (${formatPrice(currentClose)}) لتصبح المخاطرة 0$ تماماً!\n` +
+        `   💵 احجز 50% من الأرباح (أغلق نصف العقد لتضمن ~${halfProfitUSD.toFixed(2)} دولار في رصيدك)، واترك باقي العقد يجري للهدف.\n` +
+        `2️⃣ **المستوى الثاني - الهدف النهائي عند سعر ${formatPrice(tp)} (تحقيق 100%):**\n` +
+        `   🏁 أغلق كامل العقد وجني كامل الأرباح المقدرة (~${potentialProfitUSD.toFixed(2)} دولار).\n\n` +
         `📊 **تفاصيل واستراتيجية الصفقة:**\n` +
         `- نوع الدخول: ${entryTypeArabic}\n` +
         `- 🤖 تقييم الذكاء الاصطناعي (Groq Score): **${groqValidation.score}/10** (${groqValidation.reason})\n` +
