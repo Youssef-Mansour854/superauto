@@ -995,10 +995,14 @@ async function runScalperEngine() {
 
       const groqAnalysis = `إشارة ${signalType} على الذهب بناءً على شمعة 5 دقائق مكتملة.`;
 
-      // 50% Breakeven Target level for immediate trader notification
+      // 50% Breakeven Target level and 80% Major Profit Lock level for trader guidance
       const beTargetPrice = signalType === 'BUY'
         ? currentClose + 0.5 * (tp - currentClose)
         : currentClose - 0.5 * (currentClose - tp);
+
+      const target80Price = signalType === 'BUY'
+        ? currentClose + 0.8 * (tp - currentClose)
+        : currentClose - 0.8 * (currentClose - tp);
 
       const entryTypeArabic = triggerReason === 'PULLBACK'
         ? '🎯 ارتداد وإعادة اختبار (EMA20 Pullback)'
@@ -1085,6 +1089,8 @@ async function runScalperEngine() {
       const potentialProfitUSD = Number((Math.abs(tp - currentClose) * spec.contractSize * posSize.lotSize).toFixed(2));
       const halfProfitUSD = Number((potentialProfitUSD / 2).toFixed(2));
 
+      const profit80USD = Number((potentialProfitUSD * 0.65).toFixed(2));
+
       const telegramMsg =
         `🚨 **${actionHeader}** 🚨\n\n` +
         `🪙 **الأصل:** ${symbol} (ذهب)\n` +
@@ -1092,12 +1098,15 @@ async function runScalperEngine() {
         `🛑 **وقف الخسارة (SL):** **${formatPrice(sl)}**\n` +
         `🎯 **هدف الأرباح (TP):** **${formatPrice(tp)}**\n` +
         `🛡️ **تأمين الدخول (Breakeven عند 50%):** **${formatPrice(beTargetPrice)}**\n` +
+        `🔒 **حجز أرباح متقدم (80% من الهدف):** **${formatPrice(target80Price)}**\n` +
         `📦 **حجم اللوت المقترح:** ${posSize.lotSize.toFixed(2)} لوت (المخاطرة: ${posSize.actualRiskUSD.toFixed(2)} دولار)\n\n` +
         `💰 **خطة حجز الأرباح وتأمين الصفقة (خطوة بخطوة):**\n` +
         `1️⃣ **المستوى الأول - عند الوصول لسعر ${formatPrice(beTargetPrice)} (تحقيق 50%):**\n` +
         `   🛡️ انقل وقف الخسارة (SL) فوراً لسعر الدخول (${formatPrice(currentClose)}) لتصبح المخاطرة 0$ تماماً!\n` +
         `   💵 احجز 50% من الأرباح (أغلق نصف العقد لتضمن ~${halfProfitUSD.toFixed(2)} دولار في رصيدك)، واترك باقي العقد يجري للهدف.\n` +
-        `2️⃣ **المستوى الثاني - الهدف النهائي عند سعر ${formatPrice(tp)} (تحقيق 100%):**\n` +
+        `2️⃣ **المستوى الثاني - عند الوصول لسعر ${formatPrice(target80Price)} (تحقيق 80%):**\n` +
+        `   🔒 تأمين أرباح كبير: البوت بيرفع الوقف تلقائياً ليحجز 65% من أرباح الهدف كاش مضمون (~${profit80USD.toFixed(2)} دولار) في حال ارتداد السعر مفاجئاً.\n` +
+        `3️⃣ **المستوى الثالث - الهدف النهائي عند سعر ${formatPrice(tp)} (تحقيق 100%):**\n` +
         `   🏁 أغلق كامل العقد وجني كامل الأرباح المقدرة (~${potentialProfitUSD.toFixed(2)} دولار).\n\n` +
         `📊 **تفاصيل واستراتيجية الصفقة:**\n` +
         `- نوع الدخول: ${entryTypeArabic}\n` +
