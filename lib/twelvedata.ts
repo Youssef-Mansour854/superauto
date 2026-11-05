@@ -25,14 +25,23 @@ function sanitizeApiKey(text: string, apiKey: string): string {
   return text.split(apiKey).join('[REDACTED_KEY]');
 }
 
+const DEFAULT_TWELVEDATA_KEYS = '29d676f8d5874b54bc16c98f1698e528,dc0cbdc826a24e76a81ae1d115f9d14d';
+
+export function getTwelveDataApiKeys(): string[] {
+  const rawKeyString = process.env.TWELVEDATA_API_KEY || DEFAULT_TWELVEDATA_KEYS;
+  return rawKeyString
+    .split(',')
+    .map(k => k.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 export async function fetchTwelveData5mKlines(
   symbol: string = 'XAU/USD',
   interval: string = '5min',
   outputsize: number = 100
 ): Promise<CandleFetchResult> {
   const apiSymbol = normalizeTwelveDataSymbol(symbol);
-  const rawKeyString = process.env.TWELVEDATA_API_KEY || '29d676f8d5874b54bc16c98f1698e528';
-  const apiKeys = rawKeyString.split(',').map(k => k.trim()).filter(Boolean);
+  const apiKeys = getTwelveDataApiKeys();
   if (apiKeys.length === 0) {
     return {
       candles: [],
@@ -51,7 +60,11 @@ export async function fetchTwelveData5mKlines(
 
   const url = `https://api.twelvedata.com/time_series`;
 
-  for (let i = 0; i < apiKeys.length; i++) {
+  // Distribute requests across all keys (rotates starting key every minute to load balance evenly)
+  const startOffset = Math.floor(Date.now() / 60000) % apiKeys.length;
+
+  for (let step = 0; step < apiKeys.length; step++) {
+    const i = (startOffset + step) % apiKeys.length;
     const apiKey = apiKeys[i];
     try {
       const response = await axios.get(url, {
@@ -180,59 +193,77 @@ export async function fetchTwelveDataBatch5mKlines(
   const result: Record<string, Candle[]> = {};
   symbols.forEach((s) => (result[s] = []));
 
-  try {
-    const apiKey = process.env.TWELVEDATA_API_KEY || '29d676f8d5874b54bc16c98f1698e528';
-    const url = `https://api.twelvedata.com/time_series`;
+  const apiKeys = getTwelveDataApiKeys();
+  if (apiKeys.length === 0) return result;
 
-    const response = await axios.get(url, {
-      params: {
-        symbol: symbols.join(','),
-        interval,
-        outputsize,
-        apikey: apiKey,
-      },
-      timeout: 12000,
-    });
+  const url = `https://api.twelvedata.com/time_series`;
+  const startOffset = Math.floor(Date.now() / 60000) % apiKeys.length;
 
-    const data = response.data;
-    if (!data) return result;
+  for (let step = 0; step < apiKeys.length; step++) {
+    const i = (startOffset + step) % apiKeys.length;
+    const apiKey = apiKeys[i];
+    try {
+      const response = await axios.get(url, {
+        params: {
+          symbol: symbols.join(','),
+          interval,
+          outputsize,
+          apikey: apiKey,
+        },
+        timeout: 12000,
+        validateStatus: () => true
+      });
 
-    for (const sym of symbols) {
-      const symData = data[sym] || (data.meta?.symbol === sym ? data : null);
-      if (symData && Array.isArray(symData.values)) {
-        const rawValues = symData.values;
-        const candles: Candle[] = rawValues
-          .map((item: any) => {
-            const open = parseFloat(item.open);
-            const high = parseFloat(item.high);
-            const low = parseFloat(item.low);
-            const close = parseFloat(item.close);
-            const volume = parseFloat(item.volume || '0');
-            const openTime = new Date(item.datetime).getTime();
-            const closeTime = openTime + 5 * 60 * 1000;
+      const data = response.data;
+      if (!data) continue;
 
-            if (isNaN(close) || isNaN(openTime)) return null;
-
-            return {
-              openTime,
-              open: isNaN(open) ? close : open,
-              high: isNaN(high) ? close : high,
-              low: isNaN(low) ? close : low,
-              close,
-              volume: isNaN(volume) ? 0 : volume,
-              closeTime,
-            };
-          })
-          .filter((c: Candle | null): c is Candle => c !== null);
-
-        candles.reverse();
-        result[sym] = candles;
+      if (response.status === 429 || data.code === 429 || (data.message && String(data.message).includes('run out of API credits'))) {
+        console.warn(`Twelve Data batch key ${i + 1}/${apiKeys.length} reached daily rate limit (429). Trying fallback key...`);
+        continue;
       }
-    }
 
-    return result;
-  } catch (error: any) {
-    console.error(`Error fetching Twelve Data batch 5m klines:`, error?.response?.data || error?.message || error);
-    return result;
+      if (response.status >= 400 || data.status === 'error') {
+        continue;
+      }
+
+      for (const sym of symbols) {
+        const symData = data[sym] || (data.meta?.symbol === sym ? data : null);
+        if (symData && Array.isArray(symData.values)) {
+          const rawValues = symData.values;
+          const candles: Candle[] = rawValues
+            .map((item: any) => {
+              const open = parseFloat(item.open);
+              const high = parseFloat(item.high);
+              const low = parseFloat(item.low);
+              const close = parseFloat(item.close);
+              const volume = parseFloat(item.volume || '0');
+              const openTime = new Date(item.datetime).getTime();
+              const closeTime = openTime + 5 * 60 * 1000;
+
+              if (isNaN(close) || isNaN(openTime)) return null;
+
+              return {
+                openTime,
+                open: isNaN(open) ? close : open,
+                high: isNaN(high) ? close : high,
+                low: isNaN(low) ? close : low,
+                close,
+                volume: isNaN(volume) ? 0 : volume,
+                closeTime,
+              };
+            })
+            .filter((c: Candle | null): c is Candle => c !== null);
+
+          candles.reverse();
+          result[sym] = candles;
+        }
+      }
+
+      return result;
+    } catch (error: any) {
+      console.error(`Error fetching Twelve Data batch 5m klines with key ${i + 1}:`, error?.response?.data || error?.message || error);
+    }
   }
+
+  return result;
 }
