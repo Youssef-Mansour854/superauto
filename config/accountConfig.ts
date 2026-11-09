@@ -189,10 +189,9 @@ export interface PositionSizeResult {
  * - رصيد 800$ فأكثر: لوت 0.08
  */
 export function getCompoundingLot(accountBalance: number = getLiveAccountBalance()): number {
-  if (accountBalance >= 800) return 0.08;
-  if (accountBalance >= 400) return 0.04;
-  if (accountBalance >= 200) return 0.02;
-  return 0.01;
+  if (accountBalance <= 0) return 0.01;
+  const lots = Math.floor(accountBalance / 100) * 0.01;
+  return Math.max(0.01, Number(lots.toFixed(2)));
 }
 
 /**
