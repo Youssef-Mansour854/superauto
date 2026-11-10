@@ -16,7 +16,6 @@ import {
   getLiveAccountBalance,
   getLiveRiskPercent,
   getSymbolSpec,
-  getMaxTradeRiskUSD,
   getMaxDailyLossUSD,
   getMaxConsecutiveLosses,
   getCoolDownMinutes,
@@ -161,7 +160,7 @@ function getSessionName(date: Date): string {
   return 'PACIFIC';
 }
 
-async function getRiskCircuitBreakerReason(): Promise<string | null> {
+async function getRiskCircuitBreakerReason(accountBalance: number = getLiveAccountBalance()): Promise<string | null> {
   const now = new Date();
   const startOfUtcDay = new Date(now);
   startOfUtcDay.setUTCHours(0, 0, 0, 0);
@@ -174,8 +173,9 @@ async function getRiskCircuitBreakerReason(): Promise<string | null> {
   const todaysNet = todaysTrades.reduce((total, trade) => {
     return total + (typeof trade.netPnLUSD === 'number' ? trade.netPnLUSD : 0);
   }, 0);
-  if (todaysNet <= -getMaxDailyLossUSD()) {
-    return `Daily model-loss limit reached (${todaysNet.toFixed(2)} USD).`;
+  // الحد اليومي متدرج مع اللوت (12$ لكل 0.01 لوت) ليطابق قاعدة كل 100$ = 0.01 لوت
+  if (todaysNet <= -getMaxDailyLossUSD(accountBalance)) {
+    return `Daily model-loss limit reached (${todaysNet.toFixed(2)} USD vs cap ${getMaxDailyLossUSD(accountBalance).toFixed(2)} USD).`;
   }
 
   const maxConsecutiveLosses = getMaxConsecutiveLosses();
@@ -797,7 +797,7 @@ async function runScalperEngine() {
     entryRiskBlockReason = 'Database unavailable; refusing to create untracked signals.';
   } else {
     try {
-      entryRiskBlockReason = await getRiskCircuitBreakerReason();
+      entryRiskBlockReason = await getRiskCircuitBreakerReason(currentLiveBal);
       if (entryRiskBlockReason) logs.push(`[Entry Circuit Breaker] ${entryRiskBlockReason}`);
     } catch (riskStateError: any) {
       entryRiskBlockReason = 'Could not verify model risk limits; refusing new signals.';
@@ -944,7 +944,7 @@ async function runScalperEngine() {
 
       // Fail closed only on absolute dollar cap (e.g. wild news candle ATR > $7), but allow broker minimum lot 0.01
       if (posSize.exceedsMaxRiskCap) {
-        const capMsg = `[${symbol}] 🚨 actual risk exceeds the configured dollar cap (actual $${posSize.actualRiskUSD.toFixed(2)} vs cap $${getMaxTradeRiskUSD()}; ATR ${currentAtr.toFixed(2)}). Signal cancelled.`;
+        const capMsg = `[${symbol}] 🚨 actual risk exceeds the configured dollar cap (actual $${posSize.actualRiskUSD.toFixed(2)} vs cap $${posSize.maxRiskCapUSD.toFixed(2)} for ${posSize.lotSize} lot; ATR ${currentAtr.toFixed(2)}). Signal cancelled.`;
         logs.push(capMsg);
         console.warn(capMsg);
         return { symbol, signalTriggered: false, skipped: true, reason: capMsg };

@@ -20,11 +20,11 @@ export const ACCOUNT_BALANCE: number = 100; // ⚠️ PLACEHOLDER - يحتاج �
 // نسبة المخاطرة الافتراضية 2% من رأس المال لكل صفقة
 export const RISK_PERCENT: number = 2.0;
 
-// أقصى خسارة مسموح بها للصفقة الواحدة بالدولار لحماية الحساب من قفزات الـ ATR العنيفة
-export const MAX_TRADE_RISK_USD: number = 7.00; // سقف الخسارة 7.00$ للصفقة (يسمح بحركة الذهب الطبيعية والنشطة ويمنع قفزات الأخبار العنيفة 10$-14$)
+// سقف المخاطرة لكل 0.01 لوت (يتدرج تلقائياً مع حجم اللوت: 0.01 → 7.50$، 0.02 → 15.00$، 0.03 → 22.50$)
+export const MAX_TRADE_RISK_USD: number = 7.50; // سقف الخسارة 7.50$ لكل 0.01 لوت (يمنع فقط قفزات الأخبار العنيفة عندما يتجاوز ATR حد 5.0)
 
-// قاطع الدائرة اليومي: أقصى خسارة يومية مسموح بها قبل إيقاف البوت آلياً حتى منتصف الليل
-export const MAX_DAILY_LOSS_USD: number = 12.00; // سقف الخسارة اليومية 12.00$ (يحمي ما لا يقل عن 88-90% من الحساب)
+// قاطع الدائرة اليومي: أقصى خسارة يومية مسموح بها لكل 0.01 لوت قبل إيقاف البوت آلياً حتى منتصف الليل
+export const MAX_DAILY_LOSS_USD: number = 12.00; // سقف الخسارة اليومية 12.00$ لكل 0.01 لوت (0.01 → 12$، 0.02 → 24$)
 
 // قاطع الدائرة: أقصى عدد خسائر متتالية مسموح به لتفعيل فترة التبريد الذكية
 export const MAX_CONSECUTIVE_LOSSES: number = 3; // تفعيل فترة تبريد ذكية عند 3 خسائر متتالية
@@ -114,20 +114,34 @@ export function getLiveRiskPercent(): number {
   return RISK_PERCENT;
 }
 
-export function getMaxTradeRiskUSD(): number {
+/**
+ * سقف المخاطرة بالدولار للصفقة الواحدة، متدرجاً مع حجم اللوت:
+ * 7.50$ لكل 0.01 لوت → 0.01 = 7.50$ | 0.02 = 15.00$ | 0.03 = 22.50$
+ * القيمة الأساسية قابلة للتعديل عبر MAX_TRADE_RISK_USD (لكل 0.01 لوت).
+ */
+export function getMaxTradeRiskUSD(lotSize: number = 0.01): number {
+  let capPerStep = MAX_TRADE_RISK_USD;
   if (process.env.MAX_TRADE_RISK_USD) {
     const parsed = parseFloat(process.env.MAX_TRADE_RISK_USD);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
+    if (!isNaN(parsed) && parsed > 0) capPerStep = parsed;
   }
-  return MAX_TRADE_RISK_USD;
+  const steps = Math.max(1, Math.round(lotSize / 0.01));
+  return Number((capPerStep * steps).toFixed(2));
 }
 
-export function getMaxDailyLossUSD(): number {
+/**
+ * سقف الخسارة اليومية، متدرجاً مع حجم اللوت (وبالتالي مع رصيد الحساب):
+ * 12.00$ لكل 0.01 لوت → 0.01 = 12$ | 0.02 = 24$ | 0.03 = 36$
+ * القيمة الأساسية قابلة للتعديل عبر MAX_DAILY_LOSS_USD (لكل 0.01 لوت).
+ */
+export function getMaxDailyLossUSD(accountBalance: number = getLiveAccountBalance()): number {
+  let baseCap = MAX_DAILY_LOSS_USD;
   if (process.env.MAX_DAILY_LOSS_USD) {
     const parsed = parseFloat(process.env.MAX_DAILY_LOSS_USD);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
+    if (!isNaN(parsed) && parsed > 0) baseCap = parsed;
   }
-  return MAX_DAILY_LOSS_USD;
+  const steps = Math.max(1, Math.round(getCompoundingLot(accountBalance) / 0.01));
+  return Number((baseCap * steps).toFixed(2));
 }
 
 export function getMaxConsecutiveLosses(): number {
@@ -177,6 +191,7 @@ export interface PositionSizeResult {
   accountBalance: number;
   hasRiskWarning: boolean;
   exceedsMaxRiskCap: boolean;
+  maxRiskCapUSD: number;
   riskWarningMessage: string;
 }
 
@@ -232,6 +247,7 @@ export function calculatePositionSize(
       accountBalance,
       hasRiskWarning: false,
       exceedsMaxRiskCap: false,
+      maxRiskCapUSD: getMaxTradeRiskUSD(0.01),
       riskWarningMessage: ''
     };
   }
@@ -256,7 +272,8 @@ export function calculatePositionSize(
   const actualRiskPercent = Number(((actualRiskUSD / accountBalance) * 100).toFixed(2));
 
   // التحقق من تجاوز سقف المخاطرة الأقصى بالدولار (Max Risk Cap)
-  const maxCapUSD = getMaxTradeRiskUSD();
+  // السقف متدرج مع اللوت: 7.50$ لكل 0.01 لوت (0.02 → 15$، 0.03 → 22.50$ ...)
+  const maxCapUSD = getMaxTradeRiskUSD(roundedLot);
   const exceedsMaxRiskCap = actualRiskUSD > maxCapUSD;
 
   // التحقق مما إذا كانت المخاطرة الفعلية تختلف عن المستهدفة بأكثر من 20%
@@ -283,6 +300,7 @@ export function calculatePositionSize(
     accountBalance,
     hasRiskWarning,
     exceedsMaxRiskCap,
+    maxRiskCapUSD: maxCapUSD,
     riskWarningMessage
   };
 }
