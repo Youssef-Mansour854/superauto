@@ -16,7 +16,7 @@ import {
   getLiveAccountBalance,
   getLiveRiskPercent,
   getSymbolSpec,
-  getMaxDailyLossUSD,
+  getMaxDailyLossUnits,
   getMaxConsecutiveLosses,
   getCoolDownMinutes,
 } from '@/config/accountConfig';
@@ -160,7 +160,7 @@ function getSessionName(date: Date): string {
   return 'PACIFIC';
 }
 
-async function getRiskCircuitBreakerReason(accountBalance: number = getLiveAccountBalance()): Promise<string | null> {
+async function getRiskCircuitBreakerReason(): Promise<string | null> {
   const now = new Date();
   const startOfUtcDay = new Date(now);
   startOfUtcDay.setUTCHours(0, 0, 0, 0);
@@ -168,14 +168,21 @@ async function getRiskCircuitBreakerReason(accountBalance: number = getLiveAccou
   const todaysTrades = await TradeHistory.find({
     tradeType: 'SCALP',
     closedAt: { $gte: startOfUtcDay }
-  }).select('status netPnLUSD closedAt').sort({ closedAt: -1 }).lean();
+  }).select('status netPnLUSD suggestedLotSize closedAt').sort({ closedAt: -1 }).lean();
 
-  const todaysNet = todaysTrades.reduce((total, trade) => {
-    return total + (typeof trade.netPnLUSD === 'number' ? trade.netPnLUSD : 0);
+  // نقيس الخسارة بوحدات «0.01 لوت» بدلاً من الدولار الخام، حتى لا يتقلّص السقف
+  // بأثر رجعي إذا نزل اللوت بعد خسارة كانت في حدود سقفها وقت حدوثها.
+  // units = netPnLUSD × (0.01 ÷ lotSize)  → ربح وخسارة بنفس المعاملة.
+  const todaysNetUnits = todaysTrades.reduce((total, trade) => {
+    if (typeof trade.netPnLUSD !== 'number') return total;
+    const lot = typeof trade.suggestedLotSize === 'number' && trade.suggestedLotSize > 0
+      ? trade.suggestedLotSize
+      : 0.01;
+    return total + trade.netPnLUSD * (0.01 / lot);
   }, 0);
-  // الحد اليومي متدرج مع اللوت (12$ لكل 0.01 لوت) ليطابق قاعدة كل 100$ = 0.01 لوت
-  if (todaysNet <= -getMaxDailyLossUSD(accountBalance)) {
-    return `Daily model-loss limit reached (${todaysNet.toFixed(2)} USD vs cap ${getMaxDailyLossUSD(accountBalance).toFixed(2)} USD).`;
+  const dailyLossCapUnits = getMaxDailyLossUnits();
+  if (todaysNetUnits <= -dailyLossCapUnits) {
+    return `Daily model-loss limit reached (${todaysNetUnits.toFixed(2)} units vs cap ${dailyLossCapUnits.toFixed(2)} units, normalized to 0.01 lot).`;
   }
 
   const maxConsecutiveLosses = getMaxConsecutiveLosses();
@@ -797,7 +804,7 @@ async function runScalperEngine() {
     entryRiskBlockReason = 'Database unavailable; refusing to create untracked signals.';
   } else {
     try {
-      entryRiskBlockReason = await getRiskCircuitBreakerReason(currentLiveBal);
+      entryRiskBlockReason = await getRiskCircuitBreakerReason();
       if (entryRiskBlockReason) logs.push(`[Entry Circuit Breaker] ${entryRiskBlockReason}`);
     } catch (riskStateError: any) {
       entryRiskBlockReason = 'Could not verify model risk limits; refusing new signals.';

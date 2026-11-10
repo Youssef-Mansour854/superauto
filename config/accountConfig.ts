@@ -23,8 +23,8 @@ export const RISK_PERCENT: number = 2.0;
 // سقف المخاطرة لكل 0.01 لوت (يتدرج تلقائياً مع حجم اللوت: 0.01 → 7.50$، 0.02 → 15.00$، 0.03 → 22.50$)
 export const MAX_TRADE_RISK_USD: number = 7.50; // سقف الخسارة 7.50$ لكل 0.01 لوت (يمنع فقط قفزات الأخبار العنيفة عندما يتجاوز ATR حد 5.0)
 
-// قاطع الدائرة اليومي: أقصى خسارة يومية مسموح بها لكل 0.01 لوت قبل إيقاف البوت آلياً حتى منتصف الليل
-export const MAX_DAILY_LOSS_USD: number = 12.00; // سقف الخسارة اليومية 12.00$ لكل 0.01 لوت (0.01 → 12$، 0.02 → 24$)
+// قاطع الدائرة اليومي: أقصى خسارة يومية بوحدات 0.01 لوت (12 وحدة = 12$ لو اللوت 0.01، و24$ لو اللوت 0.02)
+export const MAX_DAILY_LOSS_USD: number = 12.00; // سقف الخسارة اليومية 12.00 وحدة (تُحتسب لكل صفقة بسعر صرف لوتها وقت التنفيذ)
 
 // قاطع الدائرة: أقصى عدد خسائر متتالية مسموح به لتفعيل فترة التبريد الذكية
 export const MAX_CONSECUTIVE_LOSSES: number = 3; // تفعيل فترة تبريد ذكية عند 3 خسائر متتالية
@@ -130,18 +130,21 @@ export function getMaxTradeRiskUSD(lotSize: number = 0.01): number {
 }
 
 /**
- * سقف الخسارة اليومية، متدرجاً مع حجم اللوت (وبالتالي مع رصيد الحساب):
- * 12.00$ لكل 0.01 لوت → 0.01 = 12$ | 0.02 = 24$ | 0.03 = 36$
+ * سقف الخسارة اليومية بوحدات «0.01 لوت» (وليس بالدولار الخام):
+ * القيمة الأساسية 12 وحدة، أي ما يعادل 12$ لو اللوت 0.01 و24$ لو اللوت 0.02.
+ *
+ * كل صفقة تُحوَّل إلى وحدات بسعر الصرف الخاص بها وقت تنفيذها:
+ *   units = netPnLUSD × (0.01 ÷ lotSize)
+ * وبذلك لا يتقلّص السقف بأثر رجعي إذا تغيّر اللوت بعد الخسارة.
+ *
  * القيمة الأساسية قابلة للتعديل عبر MAX_DAILY_LOSS_USD (لكل 0.01 لوت).
  */
-export function getMaxDailyLossUSD(accountBalance: number = getLiveAccountBalance()): number {
-  let baseCap = MAX_DAILY_LOSS_USD;
+export function getMaxDailyLossUnits(): number {
   if (process.env.MAX_DAILY_LOSS_USD) {
     const parsed = parseFloat(process.env.MAX_DAILY_LOSS_USD);
-    if (!isNaN(parsed) && parsed > 0) baseCap = parsed;
+    if (!isNaN(parsed) && parsed > 0) return parsed;
   }
-  const steps = Math.max(1, Math.round(getCompoundingLot(accountBalance) / 0.01));
-  return Number((baseCap * steps).toFixed(2));
+  return MAX_DAILY_LOSS_USD;
 }
 
 export function getMaxConsecutiveLosses(): number {
