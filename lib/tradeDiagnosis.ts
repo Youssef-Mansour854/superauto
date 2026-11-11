@@ -75,18 +75,49 @@ export function diagnoseTradeOutcome(input: TradeDiagnosisInput): TradeDiagnosis
   let outcomeReasonArabic = '';
   let postTradeLesson = '';
 
+  // مقاييس مساعدة: المخاطرة بالنقاط، وحركة السعر كنسبة من R ومن مسافة الهدف
+  const riskPoints = Math.abs(entryPrice - slPrice);
+  const mfeR = riskPoints > 0 ? maxFavorablePoints / riskPoints : 0;
+  const maeR = riskPoints > 0 ? maxDrawdownPoints / riskPoints : 0;
+  const tpDistance = Math.abs(tpPrice - entryPrice);
+  const mfePercentOfTp = tpDistance > 0 ? (maxFavorablePoints / tpDistance) * 100 : 0;
+  const triggerLabel =
+    triggerReason === 'CROSSOVER' ? 'تقاطع المتوسطات'
+    : triggerReason === 'PULLBACK' ? 'ارتداد من المتوسطات'
+    : triggerReason;
+  const directionWord = action === 'BUY' ? 'الصعود' : 'الهبوط';
+
   // 2. تحليل سبب النتيجة بالتفصيل
   if (status === 'WIN') {
+    const resultLine = `الربح الصافي: +${Math.abs(netPnLUSD).toFixed(2)}$, وأقصى ربح خلال الصفقة ${mfeR.toFixed(2)}R.`;
     if (maxDrawdownPoints <= 1.5) {
-      outcomeReasonArabic = `🎯 نجاح مثالي ومباشر: تحرك السعر بقوة مع اتجاه الزخم نحو الهدف (${formatPrice(tpPrice)}) دون أي انعكاس يذكر ضد الصفقة (أقصى انعكاس كان ${maxDrawdownPoints} نقطة فقط). تم تحقيق الهدف كاملاً خلال ${durationMinutes} دقيقة بربح صافي +${netPnLUSD.toFixed(2)}$`;
-      postTradeLesson = `توافق الدخول من ارتداد نظيف مع ترند قوي يمنح نسبة دقة مرتفعة وانزلاق سعري منعدم.`;
+      outcomeReasonArabic = `🎯 نجاح مباشر: دخلت الصفقة بإشارة ${triggerLabel} في جلسة ${sessionName} وتحرّك السعر في اتجاه ${directionWord} حتى الهدف (${formatPrice(tpPrice)}) خلال ${durationMinutes} دقيقة، دون أي انعكاس يُذكر (أقصى انعكاس ${maxDrawdownPoints} نقطة = ${maeR.toFixed(2)}R). ${resultLine}`;
+      postTradeLesson = `دخول بإشارة ${triggerLabel} في اتجاه ${directionWord} بجلسة ${sessionName} حقّق الهدف دون ضغط معاكس — هذه هي الصفقة النموذجية التي يجب تكرارها.`;
     } else {
-      outcomeReasonArabic = `🎯 نجاح بعد امتصاص التذبذب: واجهت الصفقة انعكاساً مؤقتاً بـ ${maxDrawdownPoints} نقطة لكن وقف الخسارة المحسوب (${formatPrice(slPrice)}) استوعب التذبذب بنجاح، ليعاود السعر الصعود بقوة ويحقق الهدف (${formatPrice(tpPrice)}) بعد ${durationMinutes} دقيقة.`;
-      postTradeLesson = `تحديد الستوب بناءً على (1.5x ATR) أثبت كفاءته في حماية الصفقة من التذبذبات الطبيعية قبل بلوغ الهدف.`;
+      const absorbedPct = tpDistance > 0 ? (maxDrawdownPoints / tpDistance) * 100 : 0;
+      outcomeReasonArabic = `🎯 نجاح بعد امتصاص التذبذب: واجهت الصفقة انعكاساً مؤقتاً بـ ${maxDrawdownPoints} نقطة (${maeR.toFixed(2)}R = ${absorbedPct.toFixed(0)}% من مسافة الهدف)، لكن الوقف المحسوب (${formatPrice(slPrice)}) استوعبه، ثم تحرّك السعر في اتجاه ${directionWord} حتى الهدف (${formatPrice(tpPrice)}) بعد ${durationMinutes} دقيقة. ${resultLine}`;
+      postTradeLesson = `الوقف عند 1.5×ATR (${riskPoints.toFixed(2)} نقطة) استوعب انعكاساً بـ ${maeR.toFixed(2)}R قبل أن يتحقق الهدف — المخاطرة كانت مضبوطة ولم تُضطَر لإغلاق مبكر.`;
     }
   } else if (status === 'BREAKEVEN') {
-    outcomeReasonArabic = `🛡️ خروج آمن بتأمين الدخول (Breakeven): السعر قطع أكثر من 50% من المسافة نحو الهدف وحقق تحركاً إيجابياً بـ +${maxFavorablePoints} نقطة، فقام قاطع الحماية بنقل الستوب لنقطة الدخول. ارتداد السعر لاحقاً أخرج الصفقة بربح رمزي (+${netPnLUSD.toFixed(2)}$) وحمى الحساب من انعكاس السوق.`;
-    postTradeLesson = `نظام تأمين الأرباح عند 50% منع تحول صفقة كانت رابحة إلى خسارة رأس مال.`;
+    const exitMovePoints = action === 'BUY' ? exitPrice - entryPrice : entryPrice - exitPrice;
+    const capturedPercent = tpDistance > 0 ? (exitMovePoints / tpDistance) * 100 : 0;
+    const netText = netPnLUSD >= 0
+      ? `+${Math.abs(netPnLUSD).toFixed(2)}$`
+      : `−${Math.abs(netPnLUSD).toFixed(2)}$ (بعد الفروق والعمولات)`;
+    const isTrueBreakeven = exitMovePoints <= 0.75;
+
+    if (isTrueBreakeven) {
+      outcomeReasonArabic = `🛡️ تعادل مُدار (True Breakeven): تحرّكت الصفقة لصالحها حتى ${maxFavorablePoints} نقطة (${mfeR.toFixed(2)}R = ${mfePercentOfTp.toFixed(0)}% من مسافة الهدف) في جلسة ${sessionName}، فرفع البوت الوقف إلى نقطة الدخول (مع هامش بسيط) وتم الإغلاق عند (${formatPrice(exitPrice)}) بعد ${durationMinutes} دقيقة بصافي ${netText}.`;
+      postTradeLesson = `تأمين الدخول منع تحوّل صفقة وصلت إلى ${mfePercentOfTp.toFixed(0)}% من الهدف إلى خسارة — لكن الربح لم يُقفل، فراجع آلية تتبع الوقف بعد 50% من الهدف.`;
+    } else {
+      const captured = Math.max(0, capturedPercent);
+      const wasted = Math.max(0, mfePercentOfTp - captured);
+      const wastedText = wasted >= 2
+        ? `${wasted.toFixed(0)}% من الحركة ضاعت في الارتداد، وهي مساحة لتحسين تتبّع الوقف.`
+        : `والربح المقفل جاء قريباً من أقصى حركة سجّلتها الصفقة.`;
+      outcomeReasonArabic = `🔒 خروج بقفل ربح (Profit Lock): تحرّكت الصفقة لصالحها حتى ${maxFavorablePoints} نقطة (${mfeR.toFixed(2)}R = ${mfePercentOfTp.toFixed(0)}% من مسافة الهدف) في جلسة ${sessionName}، ثم ارتد السعر فأُغلق المركز عند الوقف المرفوع (${formatPrice(exitPrice)}) بعد ${durationMinutes} دقيقة، مقفلاً ${captured.toFixed(0)}% من مسافة الهدف بصافي ${netText}.`;
+      postTradeLesson = `قفل الأرباح حوّل صفقة وصلت إلى ${mfePercentOfTp.toFixed(0)}% من الهدف إلى ربح محصّل ${netText} بدل التعادل — ${wastedText}`;
+    }
   } else if (status === 'LOSS') {
     // مستوى الوقف الكارثي الفعلي = الدخول ∓ (مضاعف الوقف × ATR)
     const hardStopPrice = atr && atr > 0
