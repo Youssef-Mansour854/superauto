@@ -15,6 +15,25 @@ function formatCairoTime(date: Date): string {
   }).format(date);
 }
 
+/**
+ * استنتاج سبب الخروج الصحيح من البيانات المخزّنة.
+ * السجلات القديمة كانت تصنّف كل خسائر الشراء تقريبًا كـ HARD_STOP بسبب مقارنة معكوسة،
+ * لذلك نعيد الاشتقاق من أقصى انعكاس فعلي (maxDrawdownPoints) مقابل الوقف الكارثي (3×ATR).
+ */
+function resolveExitReason(trade: any): 'TAKE_PROFIT' | 'SOFT_STOP' | 'HARD_STOP' | 'BREAKEVEN' | 'FRIDAY_CLOSE' | 'TIMEOUT' {
+  if (trade.status === 'WIN') return 'TAKE_PROFIT';
+  if (trade.status === 'BREAKEVEN') return 'BREAKEVEN';
+  if (trade.exitReason === 'TIMEOUT' || trade.exitReason === 'FRIDAY_CLOSE') return trade.exitReason;
+  if (trade.status === 'LOSS') {
+    const atr = typeof trade.atr === 'number' && trade.atr > 0 ? trade.atr : null;
+    const mae = typeof trade.maxDrawdownPoints === 'number' ? trade.maxDrawdownPoints : null;
+    const hardMult = trade.symbol?.includes('QQQ') || trade.symbol?.includes('IXIC') ? 2.5 : 3.0;
+    if (atr && mae != null && mae >= atr * hardMult * 0.97) return 'HARD_STOP';
+    return 'SOFT_STOP';
+  }
+  return trade.exitReason || 'SOFT_STOP';
+}
+
 export async function GET(req: Request) {
   try {
     await connectToDatabase();
@@ -112,7 +131,7 @@ export async function PATCH() {
     let updatedCount = 0;
 
     for (const t of trades) {
-      const exitReasonVal = (t.exitReason as any) || (t.status === 'WIN' ? 'TAKE_PROFIT' : (t.status === 'BREAKEVEN' ? 'BREAKEVEN' : 'HARD_STOP'));
+      const exitReasonVal = resolveExitReason(t);
       const diag = diagnoseTradeOutcome({
         action: t.action,
         status: t.status as any,
@@ -129,13 +148,22 @@ export async function PATCH() {
         rsi: t.rsi,
         exitRsi: t.exitRsi,
         sessionName: t.sessionName || 'GLOBAL',
-        triggerReason: t.triggerReason
+        triggerReason: t.triggerReason,
+        riskAmountUSD: t.riskAmountUSD,
+        atr: t.atr,
+        hardStopMultiplier: t.symbol?.includes('QQQ') || t.symbol?.includes('IXIC') ? 2.5 : 3.0
       });
 
+      t.exitReason = exitReasonVal as any;
       t.outcomeReasonArabic = diag.outcomeReasonArabic;
       t.postTradeLesson = diag.postTradeLesson;
-      t.maxDrawdownPoints = diag.maxDrawdownPoints;
-      t.maxFavorablePoints = diag.maxFavorablePoints;
+      // لا نستبدل أقصى انعكاس/أفضل حركة إن كانتا محفوظتين بالفعل (الحفاظ على القياس الأصلي)
+      if (typeof t.maxDrawdownPoints !== 'number' || !isFinite(t.maxDrawdownPoints)) {
+        t.maxDrawdownPoints = diag.maxDrawdownPoints;
+      }
+      if (typeof t.maxFavorablePoints !== 'number' || !isFinite(t.maxFavorablePoints)) {
+        t.maxFavorablePoints = diag.maxFavorablePoints;
+      }
       await t.save();
       updatedCount++;
     }

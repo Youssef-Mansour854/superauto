@@ -299,6 +299,7 @@ async function runScalperEngine() {
             logs.push(`[Pending Trade ${trade.symbol}] Current: ${formatPrice(currentPrice)} | High: ${formatPrice(candleHigh)} (Max since entry: ${formatPrice(highestHighSinceEntry)}) | Low: ${formatPrice(candleLow)} (Min since entry: ${formatPrice(lowestLowSinceEntry)}) | TP: ${formatPrice(trade.tp)} | SL: ${formatPrice(trade.sl)}`);
             let newStatus: 'WIN' | 'LOSS' | 'BREAKEVEN' | null = null;
             let exitPrice = currentPrice;
+            let resolvedExitReason: 'TAKE_PROFIT' | 'SOFT_STOP' | 'HARD_STOP' | 'BREAKEVEN' | null = null;
 
             // HYBRID SAFETY NET LOGIC (Enhanced Baseline Strategy):
             // 1. Take Profit (Wick on High/Low across ALL candles since entry + Tolerance)
@@ -316,12 +317,14 @@ async function runScalperEngine() {
               if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
+                resolvedExitReason = 'TAKE_PROFIT';
               } else if (trade.breakevenApplied) {
                 // إذا تم تأمين الصفقة (بريك إيفن بسيط أو كبير): يخرج عند لمس الوقف المؤمن trade.sl
                 const beSlHit = candleLow <= trade.sl || currentPrice <= trade.sl;
                 if (beSlHit) {
                   newStatus = 'BREAKEVEN';
                   exitPrice = trade.sl;
+                  resolvedExitReason = 'BREAKEVEN';
                 }
               } else {
                 // صفقة عادية قبل التأمين:
@@ -332,9 +335,11 @@ async function runScalperEngine() {
                 if (hardSlHit) {
                   newStatus = 'LOSS';
                   exitPrice = hardSl;
+                  resolvedExitReason = 'HARD_STOP';
                 } else if (softSlHit) {
                   newStatus = 'LOSS';
                   exitPrice = trade.sl;
+                  resolvedExitReason = 'SOFT_STOP';
                 }
               }
             } else if (trade.action === 'SELL') {
@@ -344,12 +349,14 @@ async function runScalperEngine() {
               if (tpHit) {
                 newStatus = 'WIN';
                 exitPrice = trade.tp;
+                resolvedExitReason = 'TAKE_PROFIT';
               } else if (trade.breakevenApplied) {
                 // إذا تم تأمين الصفقة (بريك إيفن بسيط أو كبير): يخرج عند لمس الوقف المؤمن trade.sl
                 const beSlHit = candleHigh >= trade.sl || currentPrice >= trade.sl;
                 if (beSlHit) {
                   newStatus = 'BREAKEVEN';
                   exitPrice = trade.sl;
+                  resolvedExitReason = 'BREAKEVEN';
                 }
               } else {
                 // صفقة عادية قبل التأمين:
@@ -360,9 +367,11 @@ async function runScalperEngine() {
                 if (hardSlHit) {
                   newStatus = 'LOSS';
                   exitPrice = hardSl;
+                  resolvedExitReason = 'HARD_STOP';
                 } else if (softSlHit) {
                   newStatus = 'LOSS';
                   exitPrice = trade.sl;
+                  resolvedExitReason = 'SOFT_STOP';
                 }
               }
             }
@@ -429,7 +438,7 @@ async function runScalperEngine() {
               try {
                 const durationMins = Math.max(1, Math.round((closedAt.getTime() - new Date(trade.timestamp).getTime()) / 60000));
                 const exitReasonVal: 'TAKE_PROFIT' | 'SOFT_STOP' | 'HARD_STOP' | 'BREAKEVEN' =
-                  newStatus === 'WIN' ? 'TAKE_PROFIT' : (isBe ? 'BREAKEVEN' : (candleHigh >= (trade.action === 'BUY' ? trade.entryPrice - atrVal * hardSlMult : trade.entryPrice + atrVal * hardSlMult) ? 'HARD_STOP' : 'SOFT_STOP'));
+                  resolvedExitReason || (newStatus === 'WIN' ? 'TAKE_PROFIT' : isBe ? 'BREAKEVEN' : 'SOFT_STOP');
 
                 diagnosis = diagnoseTradeOutcome({
                   action: trade.action,
@@ -447,7 +456,10 @@ async function runScalperEngine() {
                   rsi: trade.rsi,
                   exitRsi: indExit ? indExit.currentRsi : undefined,
                   sessionName: getSessionName(new Date()),
-                  triggerReason: trade.triggerReason
+                  triggerReason: trade.triggerReason,
+                  atr: atrVal,
+                  riskAmountUSD: trade.riskUSD ?? Math.abs(trade.entryPrice - trade.sl) * 100 * lotSize,
+                  hardStopMultiplier: hardSlMult
                 });
 
                 await DetailedTradeLog.findOneAndUpdate(
@@ -739,7 +751,10 @@ async function runScalperEngine() {
                       rsi: trade.rsi,
                       exitRsi: indExit ? indExit.currentRsi : undefined,
                       sessionName: getSessionName(new Date()),
-                      triggerReason: trade.triggerReason
+                      triggerReason: trade.triggerReason,
+                      atr: trade.atr || (Math.abs(trade.sl - trade.entryPrice) / 1.5),
+                      riskAmountUSD: trade.riskUSD ?? Math.abs(trade.entryPrice - trade.sl) * 100 * lotSize,
+                      hardStopMultiplier: trade.symbol.includes('QQQ') || trade.symbol.includes('IXIC') ? 2.5 : 3.0
                     });
 
                     await DetailedTradeLog.findOneAndUpdate(
