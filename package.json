@@ -7,7 +7,8 @@
     "start": "next start",
     "learn": "node scripts/run_ai_learning.cjs",
     "simulate": "node scripts/simulate_gold_v2.cjs",
-    "simulate:full": "node scripts/full_trade_simulation.cjs"
+    "simulate:full": "node scripts/full_trade_simulation.cjs",
+    "shadow:report": "node scripts/shadow_report.cjs"
   },
   "dependencies": {
     "@types/node": "^26.2.0",
