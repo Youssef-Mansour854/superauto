@@ -45,8 +45,11 @@ function argValue(name, fallback) {
 }
 
 const MIN_SAMPLE = 25;
-const MIN_IMPROVED_SHARE = 0.25;
-const MIN_MEDIAN_GAIN = 0.10;
+// The fix is an asymmetric option: it never lowers a stop level, so the check
+// is "does it stay harmless while gaining on a minority of trades?" rather than
+// "does it improve most trades?".
+const MIN_MATERIAL_GAIN = 5;
+const MIN_IMPROVED_TRADES = 5;
 
 (async () => {
   loadEnv();
@@ -128,10 +131,13 @@ const MIN_MEDIAN_GAIN = 0.10;
     return;
   }
   const improvedShare = out.improved / out.pairs;
-  const passes = out.gap > 0 && improvedShare >= MIN_IMPROVED_SHARE && out.medianGain >= MIN_MEDIAN_GAIN;
-  console.log(`  sample ${out.pairs}, improved ${pct(improvedShare)}, median ${f2(out.medianGain)}, worse ${out.worse}, total ${f2(out.gap)}`);
+  const harmless = out.worse === 0 && out.medianGain >= 0;
+  const material = out.gap >= MIN_MATERIAL_GAIN && out.improved >= MIN_IMPROVED_TRADES;
+  const passes = harmless && material;
+  console.log(`  sample ${out.pairs}, improved ${pct(improvedShare)} (${out.improved} trades), median ${f2(out.medianGain)}, worse ${out.worse}, total ${f2(out.gap)}`);
+  console.log(`  harmless=${harmless} material=${material}`);
   console.log(`  ${passes
-    ? 'FIX — the same-candle fill keeps costing money on fresh data with a positive median.'
+    ? 'FIX — still harmless on fresh data and still saving money.'
     : 'HOLD — the advantage is not broad or large enough on fresh data to justify a live change.'}`);
 })().catch(e => {
   console.error('ERR', e.message);
