@@ -75,6 +75,28 @@ export interface IDetailedTradeLog extends Document {
   groqReason?: string;
   groqAnalysis?: string;
 
+  // Shadow (counterfactual) evaluation: what alternative exit rules would have done
+  shadowVariants?: Array<{
+    name: string;
+    exitKind: string;
+    exitPrice?: number;
+    points?: number;
+    netPnLUSD?: number;
+    minutesHeld?: number;
+    resolved: boolean;
+  }>;
+  postExit?: {
+    tpHit: boolean;
+    minutesToTp?: number;
+    maxFavorablePoints: number;
+    maxAdversePoints: number;
+    horizonMinutes: number;
+    finalized: boolean;
+    checkedAt?: Date;
+  };
+  shadowEvaluatedAt?: Date;
+  shadowFinalized?: boolean;
+
   // Metadata & Communication
   feedSource: string;
   telegramSent: boolean;
@@ -157,6 +179,29 @@ const DetailedTradeLogSchema: Schema = new Schema<IDetailedTradeLog>({
   groqApproved: { type: Boolean },
   groqReason: { type: String },
   groqAnalysis: { type: String },
+
+  // Shadow (counterfactual) evaluation: what alternative exit rules would have done
+  shadowVariants: [{
+    _id: false,
+    name: { type: String, required: true },
+    exitKind: { type: String, required: true },
+    exitPrice: { type: Number },
+    points: { type: Number },
+    netPnLUSD: { type: Number },
+    minutesHeld: { type: Number },
+    resolved: { type: Boolean, required: true }
+  }],
+  postExit: {
+    tpHit: { type: Boolean },
+    minutesToTp: { type: Number },
+    maxFavorablePoints: { type: Number },
+    maxAdversePoints: { type: Number },
+    horizonMinutes: { type: Number },
+    finalized: { type: Boolean },
+    checkedAt: { type: Date }
+  },
+  shadowEvaluatedAt: { type: Date, index: true },
+  shadowFinalized: { type: Boolean, default: false, index: true },
 
   // Metadata & Communication
   feedSource: { type: String, required: true },

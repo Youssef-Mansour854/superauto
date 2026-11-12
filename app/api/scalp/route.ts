@@ -10,6 +10,7 @@ import { calculateScalpIndicators, formatPrice } from '@/lib/indicators';
 import { validateTradeConfluenceWithGroq } from '@/lib/groq';
 import { sendTelegramNotification } from '@/lib/telegram';
 import { diagnoseTradeOutcome } from '@/lib/tradeDiagnosis';
+import { evaluateShadow, type ShadowTradeInput } from '@/lib/shadowSimulation';
 import {
   calculatePositionSize,
   calculateDetailedPnL,
@@ -134,6 +135,96 @@ function getClosedCandles(candles: Candle[], now: Date = new Date()): Candle[] {
     .filter(c => Number.isFinite(c.openTime) && Number.isFinite(c.closeTime)
       && c.closeTime > c.openTime && c.closeTime <= nowMs)
     .sort((a, b) => a.openTime - b.openTime);
+}
+
+// ---------------------------------------------------------------------------
+// Shadow (counterfactual) evaluation. Records only; never changes a decision.
+// ---------------------------------------------------------------------------
+const SHADOW_REFRESH_WINDOW_MS = 26 * 60 * 60 * 1000;
+const shadowRefreshInFlight = new Set<string>();
+
+function hardStopMultiplierFor(symbol: string): number {
+  return symbol.includes('QQQ') || symbol.includes('IXIC') ? 2.5 : 3.0;
+}
+
+function shadowInputFromTrade(trade: any): ShadowTradeInput {
+  return {
+    action: trade.action,
+    symbol: trade.symbol,
+    entryPrice: trade.entryPrice,
+    tpPrice: trade.tpPrice ?? trade.tp,
+    atr: trade.atr || Math.abs(trade.entryPrice - (trade.slPrice ?? trade.sl)) / 1.5,
+    lotSize: trade.lotSize || trade.suggestedLotSize || 0.01,
+    entryTimestamp: new Date(trade.entryTimestamp ?? trade.timestamp).getTime(),
+    hardStopMultiplier: hardStopMultiplierFor(trade.symbol)
+  };
+}
+
+async function attachShadowEvaluation(
+  tradeId: string,
+  input: ShadowTradeInput,
+  candles: Candle[],
+  closedAt: Date
+): Promise<void> {
+  try {
+    const shadow = evaluateShadow(input, candles, closedAt);
+    await DetailedTradeLog.updateOne(
+      { tradeId },
+      {
+        $set: {
+          shadowVariants: shadow.variants,
+          postExit: shadow.postExit,
+          shadowFinalized: shadow.finalized,
+          shadowEvaluatedAt: shadow.evaluatedAt
+        }
+      }
+    );
+  } catch (shadowErr: any) {
+    console.warn('Shadow evaluation error:', shadowErr?.message || shadowErr);
+  }
+}
+
+/**
+ * Continues the counterfactual replay for recently closed trades using fresh
+ * candles, and measures whether the original target was reached after the exit.
+ * Called from the cycles that already fetch candles, so it costs no extra feed.
+ */
+async function refreshShadowEvaluations(symbol: string, candles: Candle[]): Promise<void> {
+  if (candles.length === 0) return;
+  if (shadowRefreshInFlight.has(symbol)) return;
+  shadowRefreshInFlight.add(symbol);
+  try {
+    const since = new Date(Date.now() - SHADOW_REFRESH_WINDOW_MS);
+    const recent = await DetailedTradeLog.find({
+      symbol,
+      status: { $in: ['WIN', 'LOSS', 'BREAKEVEN'] },
+      closedAt: { $gte: since },
+      shadowFinalized: { $ne: true }
+    })
+      .select('tradeId action symbol entryPrice tpPrice slPrice atr lotSize entryTimestamp closedAt')
+      .limit(40)
+      .lean();
+
+    for (const log of recent) {
+      if (!log.closedAt) continue;
+      const shadow = evaluateShadow(shadowInputFromTrade(log), candles, new Date(log.closedAt));
+      await DetailedTradeLog.updateOne(
+        { _id: log._id },
+        {
+          $set: {
+            shadowVariants: shadow.variants,
+            postExit: shadow.postExit,
+            shadowFinalized: shadow.finalized,
+            shadowEvaluatedAt: shadow.evaluatedAt
+          }
+        }
+      );
+    }
+  } catch (shadowErr: any) {
+    console.warn('Shadow refresh error:', shadowErr?.message || shadowErr);
+  } finally {
+    shadowRefreshInFlight.delete(symbol);
+  }
 }
 
 function isFreshClosedCandleData(candles: Candle[], now: Date = new Date()): boolean {
@@ -261,6 +352,9 @@ async function runScalperEngine() {
           }
           const fetchRes = await fetchAsset5mCandles(matchingItem.symbol);
           const candles = getClosedCandles(fetchRes.candles);
+          if (dbConnected) {
+            await refreshShadowEvaluations(matchingItem.symbol, candles);
+          }
           if (!candles || candles.length === 0) {
             logs.push(`[Pending Evaluation] Could not fetch candles for ${trade.symbol} (${fetchRes.feedSource}). Will retry next cycle.`);
             continue;
@@ -497,6 +591,23 @@ async function runScalperEngine() {
               } catch (detErr: any) {
                 console.warn('DetailedTradeLog update error:', detErr?.message || detErr);
               }
+
+              // Counterfactual (shadow) replay of alternative exit rules. Recording only.
+              await attachShadowEvaluation(
+                trade._id.toString(),
+                {
+                  action: trade.action,
+                  symbol: trade.symbol,
+                  entryPrice: trade.entryPrice,
+                  tpPrice: trade.tp,
+                  atr: atrVal,
+                  lotSize,
+                  entryTimestamp: new Date(trade.timestamp).getTime(),
+                  hardStopMultiplier: hardSlMult
+                },
+                evalCandles,
+                closedAt
+              );
 
               // Update active trade status to ARCHIVED so it is removed from pending list
               trade.status = 'ARCHIVED';
@@ -786,6 +897,23 @@ async function runScalperEngine() {
                     );
                   } catch {}
 
+                  // Counterfactual (shadow) replay of alternative exit rules. Recording only.
+                  await attachShadowEvaluation(
+                    trade._id.toString(),
+                    {
+                      action: trade.action,
+                      symbol: trade.symbol,
+                      entryPrice: trade.entryPrice,
+                      tpPrice: trade.tp,
+                      atr: atrVal,
+                      lotSize,
+                      entryTimestamp: new Date(trade.timestamp).getTime(),
+                      hardStopMultiplier: hardSlMult
+                    },
+                    evalCandles,
+                    closedAt
+                  );
+
                   trade.status = 'ARCHIVED';
                   trade.exitPrice = currentPrice;
                   trade.closedAt = closedAt;
@@ -857,6 +985,10 @@ async function runScalperEngine() {
       logs.push(`Processing 5m candles for ${symbol} via ${source}...`);
       const fetchRes = await fetchAsset5mCandles(symbol);
       const candles = getClosedCandles(fetchRes.candles);
+
+      if (dbConnected && candles.length > 0) {
+        await refreshShadowEvaluations(symbol, candles);
+      }
 
       if (!candles || candles.length < 100) {
         const msg = `Insufficient candle data for ${symbol} (${fetchRes.feedSource}). Skipping.`;
