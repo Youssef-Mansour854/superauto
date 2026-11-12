@@ -42,6 +42,14 @@ export interface ShadowVariantSpec {
   /** Fraction of the target distance that moves the stop to breakeven. null = never. */
   beAtProgress: number | null;
   tiers: ShadowTier[];
+  /**
+   * Because the live engine raises the stop and checks it again on the *same*
+   * candle (which necessarily already traded through the new level), a lock
+   * raised from a candle's extreme is filled on that very candle. Variants with
+   * this flag reproduce that behaviour; the others raise the stop and only let
+   * price action from the next candle trigger it.
+   */
+  sameBarStopCheck?: boolean;
 }
 
 /** Matches the live strategy's floor for the Tier 2 lock. */
@@ -55,7 +63,20 @@ const DEFAULT_POST_EXIT_HORIZON_MINUTES = 180;
 
 export const SHADOW_VARIANTS: ShadowVariantSpec[] = [
   {
+    // Faithful reproduction of the deployed rules, including the same-candle
+    // stop check. Used to validate the replay against the recorded outcomes.
     name: 'CURRENT',
+    beAtProgress: 0.5,
+    tiers: [
+      { progress: 0.80, lockFraction: 0.65, pointsTrigger: 5.0 },
+      { progress: 0.65, lockFraction: 0.40, pointsTrigger: 3.5 }
+    ],
+    sameBarStopCheck: true
+  },
+  {
+    // The deployed rules with the stop only reacting to price after the candle
+    // that raised it. Measures what the same-candle fill costs.
+    name: 'CURRENT_CLEAN',
     beAtProgress: 0.5,
     tiers: [
       { progress: 0.80, lockFraction: 0.65, pointsTrigger: 5.0 },
@@ -124,6 +145,8 @@ export interface ShadowEvaluation {
   postExit: ShadowPostExit;
   finalized: boolean;
   evaluatedAt: Date;
+  /** False when the candle window starts after the entry, so the replay is invalid. */
+  dataCoversEntry: boolean;
 }
 
 function netFor(input: ShadowTradeInput, points: number): number {
@@ -182,6 +205,7 @@ function runVariant(spec: ShadowVariantSpec, input: ShadowTradeInput, bars: Shad
 
     // 3. Management, applied after the candle closes.
     const floating = isBuy ? highest - entry : entry - lowest;
+    const slBeforeManagement = sl;
 
     if (!breakevenApplied && spec.beAtProgress !== null && floating >= tpDistance * spec.beAtProgress) {
       const next = isBuy ? entry + BREAKEVEN_BUFFER_POINTS : entry - BREAKEVEN_BUFFER_POINTS;
@@ -200,6 +224,13 @@ function runVariant(spec: ShadowVariantSpec, input: ShadowTradeInput, bars: Shad
         const next = isBuy ? entry + lockedPoints : entry - lockedPoints;
         if (isBuy ? next > sl : next < sl) sl = next;
       }
+    }
+
+    // 3b. The live engine re-checks the stop on the same candle that raised it,
+    //     so a stop raised from this candle's extreme fills on this candle.
+    if (spec.sameBarStopCheck && sl !== slBeforeManagement) {
+      const filled = isBuy ? bar.low <= sl : bar.high >= sl;
+      if (filled) return finish('BREAKEVEN', sl, bar);
     }
 
     // 4. Smart time stop.
@@ -277,14 +308,25 @@ export function evaluateShadow(
   candles: ShadowBar[],
   closedAt: Date
 ): ShadowEvaluation {
+  // The feed only returns a limited window of candles. If it starts after the
+  // entry, the replay would begin mid-trade and produce a meaningless result.
+  const dataCoversEntry = candles.some(
+    bar => Number.isFinite(bar.openTime) && bar.openTime <= input.entryTimestamp
+  );
+
   const bars = candles
     .filter(bar => Number.isFinite(bar.openTime) && Number.isFinite(bar.closeTime))
     .filter(bar => bar.openTime >= input.entryTimestamp)
     .sort((a, b) => a.openTime - b.openTime);
 
-  const variants = bars.length > 0 ? SHADOW_VARIANTS.map(spec => runVariant(spec, input, bars)) : [];
+  const variants = dataCoversEntry && bars.length > 0
+    ? SHADOW_VARIANTS.map(spec => runVariant(spec, input, bars))
+    : [];
   const postExit = buildPostExit(input, bars, closedAt);
-  const finalized = postExit.finalized && variants.every(variant => variant.resolved);
+  const finalized = dataCoversEntry
+    && postExit.finalized
+    && variants.length > 0
+    && variants.every(variant => variant.resolved);
 
-  return { variants, postExit, finalized, evaluatedAt: new Date() };
+  return { variants, postExit, finalized, evaluatedAt: new Date(), dataCoversEntry };
 }

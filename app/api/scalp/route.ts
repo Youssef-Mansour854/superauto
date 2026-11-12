@@ -140,7 +140,7 @@ function getClosedCandles(candles: Candle[], now: Date = new Date()): Candle[] {
 // ---------------------------------------------------------------------------
 // Shadow (counterfactual) evaluation. Records only; never changes a decision.
 // ---------------------------------------------------------------------------
-const SHADOW_REFRESH_WINDOW_MS = 26 * 60 * 60 * 1000;
+const SHADOW_REFRESH_WINDOW_MS = 20 * 60 * 60 * 1000;
 const shadowRefreshInFlight = new Set<string>();
 
 function hardStopMultiplierFor(symbol: string): number {
@@ -168,6 +168,7 @@ async function attachShadowEvaluation(
 ): Promise<void> {
   try {
     const shadow = evaluateShadow(input, candles, closedAt);
+    if (!shadow.dataCoversEntry) return;
     await DetailedTradeLog.updateOne(
       { tradeId },
       {
@@ -208,6 +209,7 @@ async function refreshShadowEvaluations(symbol: string, candles: Candle[]): Prom
     for (const log of recent) {
       if (!log.closedAt) continue;
       const shadow = evaluateShadow(shadowInputFromTrade(log), candles, new Date(log.closedAt));
+      if (!shadow.dataCoversEntry) continue;
       await DetailedTradeLog.updateOne(
         { _id: log._id },
         {
