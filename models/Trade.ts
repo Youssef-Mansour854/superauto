@@ -7,6 +7,8 @@ export interface ITrade extends Document {
   exitPrice?: number;
   sl: number;
   tp: number;
+  /** Original 1.5×ATR stop at entry. `sl` is mutated by breakeven/profit locks. */
+  initialSl?: number;
   rsi?: number;
   ema20?: number;
   ema100?: number;
@@ -44,6 +46,7 @@ const TradeSchema: Schema = new Schema<ITrade>({
   exitPrice: { type: Number },
   sl: { type: Number, required: true },
   tp: { type: Number, required: true },
+  initialSl: { type: Number },
   rsi: { type: Number },
   ema20: { type: Number },
   ema100: { type: Number },

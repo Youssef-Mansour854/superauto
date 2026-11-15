@@ -24,6 +24,18 @@ export interface IDetailedTradeLog extends Document {
   tpPrice: number;
   breakevenTriggerPrice: number;
   exitReason?: 'TAKE_PROFIT' | 'SOFT_STOP' | 'HARD_STOP' | 'BREAKEVEN' | 'FRIDAY_CLOSE' | 'TIMEOUT';
+  /**
+   * How the exit was judged.
+   *   'touch' — first-touch-per-level replay (resting orders, see lib/exitEngine.ts)
+   *   'close' — legacy model: target from the aggregate high/low, stop only on a
+   *             5m close. Rows without this field predate the fix and must be
+   *             read as legacy, never silently rewritten.
+   */
+  exitModel?: 'close' | 'touch';
+  /** True when the exit candle touched both the target and a stop (stop assumed first). */
+  ambiguousSameCandle?: boolean;
+  /** Stop level in force when the trade ended (original or raised by management). */
+  stopAtExit?: number;
 
   // Position & Financials
   lotSize: number;
@@ -129,6 +141,9 @@ const DetailedTradeLogSchema: Schema = new Schema<IDetailedTradeLog>({
   tpPrice: { type: Number, required: true },
   breakevenTriggerPrice: { type: Number, required: true },
   exitReason: { type: String, enum: ['TAKE_PROFIT', 'SOFT_STOP', 'HARD_STOP', 'BREAKEVEN', 'FRIDAY_CLOSE', 'TIMEOUT'] },
+  exitModel: { type: String, enum: ['close', 'touch'], index: true },
+  ambiguousSameCandle: { type: Boolean },
+  stopAtExit: { type: Number },
 
   // Position & Financials
   lotSize: { type: Number, required: true },
