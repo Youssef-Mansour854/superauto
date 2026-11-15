@@ -5,11 +5,17 @@
  * the same candles, so this report answers "what would X have done?" without
  * touching the live strategy.
  *
- * The deployed engine has one known behaviour: a stop raised from a candle's
- * extreme is re-checked on that same candle and fills immediately, which turns
- * a profit lock into an early limit exit. CURRENT reproduces that faithfully,
- * CURRENT_CLEAN applies the same rules without it. The gap between them is the
- * money that behaviour costs.
+ * The deployed engine used to re-check a stop raised from a candle's extreme on
+ * that same candle and fill immediately, which turned a profit lock into an
+ * early limit exit. CURRENT reproduces that legacy behaviour; CURRENT_CLEAN
+ * applies the same rules with the level active only from the next candle. The
+ * gap between them is what that one bug cost.
+ *
+ * That bug is fixed (lib/exitEngine.ts, deployed 2026-11-15T23:43Z). Trades
+ * closed after the deploy are judged by the touch engine, so the default
+ * baseline moved to the deploy time: the verdict below is now about whether the
+ * fixed model still holds on data it has never seen, not about whether to adopt
+ * it. Shadow rows remain counterfactuals and never feed a trading decision.
  *
  * Usage: npm run shadow:report [-- --baseline=YYYY-MM-DD]
  */
@@ -62,8 +68,8 @@ const MIN_IMPROVED_TRADES = 5;
   await mongoose.disconnect();
 
   // The trades used to discover the issue are training data; the verdict must
-  // come from trades closed after that point (out-of-sample).
-  const baseline = new Date(argValue('baseline', '2026-11-12T10:45:00Z'));
+  // come from trades closed after the touch model went live (out-of-sample).
+  const baseline = new Date(argValue('baseline', '2026-11-15T23:43:00Z'));
   const inSample = all.filter(t => new Date(t.closedAt) <= baseline);
   const outSample = all.filter(t => new Date(t.closedAt) > baseline);
 
@@ -125,9 +131,9 @@ const MIN_IMPROVED_TRADES = 5;
     console.log(`\n=== POST-EXIT ===\n  original target reached within 180m after the exit: ${tpAfter}/${post.length} (${pct(tpAfter / post.length)})`);
   }
 
-  console.log(`\n=== VERDICT (same-candle fix) ===`);
+  console.log(`\n=== VERDICT (touch model on fresh data) ===`);
   if (!out || out.pairs < MIN_SAMPLE) {
-    console.log(`  HOLD — ${out ? out.pairs : 0}/${MIN_SAMPLE} out-of-sample trades. Keep collecting.`);
+    console.log(`  HOLD — ${out ? out.pairs : 0}/${MIN_SAMPLE} out-of-sample trades since the deploy. Keep collecting.`);
     return;
   }
   const improvedShare = out.improved / out.pairs;
@@ -137,8 +143,8 @@ const MIN_IMPROVED_TRADES = 5;
   console.log(`  sample ${out.pairs}, improved ${pct(improvedShare)} (${out.improved} trades), median ${f2(out.medianGain)}, worse ${out.worse}, total ${f2(out.gap)}`);
   console.log(`  harmless=${harmless} material=${material}`);
   console.log(`  ${passes
-    ? 'FIX — still harmless on fresh data and still saving money.'
-    : 'HOLD — the advantage is not broad or large enough on fresh data to justify a live change.'}`);
+    ? 'CONFIRMED — the fix still pays on trades it never saw. Keep it.'
+    : 'REVIEW — on fresh data the fix is not clearly beneficial. The live journal is now the truth; revisit with a larger sample before touching rules again.'}`);
 })().catch(e => {
   console.error('ERR', e.message);
   process.exit(1);
