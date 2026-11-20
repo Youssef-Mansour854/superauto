@@ -1,0 +1,28 @@
+إثبات إن البوت الحقيقي اتفضل زي ما هو
+=====================================
+التاريخ: 2026-11-20 23:30 UTC
+
+الأمر اللي اتشغّل:
+  git diff -- app/api/scalp/route.ts lib/exitEngine.ts models/ lib/twelvedata.ts lib/indicators.ts scripts/shadow_report.cjs lib/shadowSimulation.ts
+  git diff -- reports/
+  git diff --name-only
+
+النتيجة: مفيش أي تعديل في ملفات البوت الحقيقي (الإخراج فاضي).
+
+الملفات الوحيدة المتغيرة من اللي كانت متتبعة في git:
+  M .gitignore          (أضفنا .shadow-build/ بس)
+  M package.json        (أضفنا سكربتات shadow:* بس، ما مسّناش أي سكربت قديم)
+
+ملفات جديدة كلها معزولة (untracked):
+  app/api/shadow/
+  docs/
+  lib/shadow/
+  reports/
+  scripts/shadow_cli.ts
+  tests/shadowEvaluator.test.cjs
+  tests/shadowParity.test.cjs
+  tsconfig.shadow.json
+
+ يعني: مفيش تغيير في منطق الإشارة، ولا في lib/exitEngine.ts، ولا في جداول detailed_trade_logs /
+ trade_history / accountstates، ولا في تقرير bot-numbers-2026-11-19.xlsx، ولا في سكربت الظل القديم.
+ الـ /api/shadow نقطة منفصلة تمامًا عن /api/scalp ومبتدئة بـ SHADOW_ENABLED=false.

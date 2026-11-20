@@ -8,7 +8,12 @@
     "learn": "node scripts/run_ai_learning.cjs",
     "simulate": "node scripts/simulate_gold_v2.cjs",
     "simulate:full": "node scripts/full_trade_simulation.cjs",
-    "shadow:report": "node scripts/shadow_report.cjs"
+    "shadow:report": "node scripts/shadow_report.cjs",
+    "shadow:build": "tsc -p tsconfig.shadow.json",
+    "shadow:test": "npm run shadow:build && node tests/shadowEvaluator.test.cjs && node tests/shadowParity.test.cjs",
+    "shadow:cli": "npm run shadow:build && node .shadow-build/scripts/shadow_cli.js",
+    "shadow:health": "npm run shadow:cli -- health",
+    "shadow:backfill": "npm run shadow:cli -- backfill --days 30"
   },
   "dependencies": {
     "@types/node": "^26.2.0",

@@ -1,0 +1,28 @@
+{
+  "generatedAt": "2026-11-20T23:32:53.254Z",
+  "evaluator_version": "shadow-exit-v1",
+  "source": "C:\\Users\\hp\\Desktop\\trading\\reports\\bot-numbers-2026-11-19.xlsx",
+  "candles": "C:/Users/hp/AppData/Local/Temp/opencode/candles_5m.json",
+  "compared": 122,
+  "counts": {
+    "match": 64,
+    "management": 58,
+    "entry_candle": 0,
+    "gap_policy": 0,
+    "time_stop": 0,
+    "missing_exit": 0,
+    "unexplained": 0
+  },
+  "examples": {
+    "management": {
+      "row": 2,
+      "label": "04/11/2026, 03:00",
+      "direction": "BUY",
+      "expected": "MANAGEMENT",
+      "actual": "TARGET",
+      "exitPrice": 3939.841112,
+      "net": 8.369702
+    }
+  },
+  "note": "Exact equality is not expected: the shared evaluator excludes the signal bar, has no breakeven/profit locks, and closes at the bar close on time stop."
+}
