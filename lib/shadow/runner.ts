@@ -128,7 +128,12 @@ export async function runShadowCycle(now = Date.now()): Promise<CycleReport> {
   const all = await loadCandles(now - 14 * DAY_MS, now, 20000);
   const state = await ShadowState.findOne({ key: 'lastBar:live' }).lean().catch(() => null) as any;
   const lastProcessed = Number(state?.lastBarCloseTime || 0);
-  const newBars = all.filter(c => c.closeTime > lastProcessed && c.closeTime <= now);
+  const lastClosed = all.length ? Math.max(...all.map(c => c.closeTime)) : 0;
+  // First run has no cursor: start live from the newest closed bar, not from
+  // 14 days of warm-up candles. History belongs to replay/backfill, not here.
+  const resumeFrom = lastProcessed > 0 ? lastProcessed : Math.max(0, lastClosed - FIVE_MIN);
+  // Bound catch-up after downtime so one cycle always finishes inside its slot.
+  const newBars = all.filter(c => c.closeTime > resumeFrom && c.closeTime <= now).slice(-12);
   const report: CycleReport = { fetched: fetched.length, newBars: newBars.length, signals: 0, exits: 0, errors: [], degraded, evaluatorVersion: EVALUATOR_VERSION };
   const resolver = makeResolver(guard);
 

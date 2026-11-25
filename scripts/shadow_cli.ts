@@ -1,9 +1,9 @@
-/** CLI: report | replay | backfill | health. Run through the npm scripts. */
+/** CLI: cycle | report | replay | backfill | health. Run through the npm scripts. */
 import { loadShadowEnv } from '../lib/shadow/env';
 import { EVALUATOR_VERSION, PARAMS_VERSION, STRATEGY_IDS, isShadowEnabled } from '../lib/shadow/config';
 import { buildReport } from '../lib/shadow/report';
 import { replayStrategy } from '../lib/shadow/replay';
-import { backfillDays } from '../lib/shadow/runner';
+import { backfillDays, runShadowCycle } from '../lib/shadow/runner';
 import { connectToDatabase } from '../lib/mongodb';
 import { ApiUsageLog, ShadowHealth } from '../lib/shadow/store';
 import { utcDateKey } from '../lib/shadow/budget';
@@ -37,6 +37,11 @@ async function main(): Promise<void> {
   const command = process.argv[2] || 'report';
   const o = args();
   if (command === 'health') return health();
+  if (command === 'cycle') {
+    const r = await runShadowCycle();
+    console.log(JSON.stringify(r));
+    return;
+  }
   if (command === 'backfill') {
     const r = await backfillDays(Number(o.days || 30));
     console.log(JSON.stringify(r));

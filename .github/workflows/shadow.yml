@@ -5,7 +5,8 @@ name: Shadow worker
 # Optional secrets:
 #   SHADOW_CRON_SECRET   -> sent as Authorization: Bearer when CRON_SECRET is set on Vercel
 #   VERCEL_BYPASS_TOKEN  -> sent as x-vercel-protection-bypass when Deployment Protection is on
-# Both are optional: the job reports a clear HTTP code if either is missing.
+# Without VERCEL_BYPASS_TOKEN the job skips: the active scheduler is the local
+# Windows task ShadowWorker (scripts/shadow_worker.bat, every 5 minutes).
 
 on:
   schedule:
@@ -31,6 +32,10 @@ jobs:
           VERCEL_BYPASS_TOKEN: ${{ secrets.VERCEL_BYPASS_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${VERCEL_BYPASS_TOKEN:-}" ]; then
+            echo "VERCEL_BYPASS_TOKEN not set; local ShadowWorker task is the active scheduler. Skipping."
+            exit 0
+          fi
           headers=()
           if [ -n "${SHADOW_CRON_SECRET:-}" ]; then
             headers+=(-H "Authorization: Bearer $SHADOW_CRON_SECRET")
