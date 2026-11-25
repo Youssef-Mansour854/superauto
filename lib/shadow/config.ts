@@ -35,9 +35,12 @@ export function isStrategyEnabled(id: string): boolean {
   return envName ? !envBool(envName, false) : true;
 }
 
-/** Global gate. Nothing (not even a database call) happens when this is false. */
+/**
+ * Global gate. Enabled by default on request (25/11/2026); setting
+ * SHADOW_ENABLED=false in the environment still turns everything off instantly.
+ */
 export function isShadowEnabled(): boolean {
-  return envBool('SHADOW_ENABLED', false);
+  return envBool('SHADOW_ENABLED', true);
 }
 
 export const DAILY_HARD_CAP_CREDITS = 750;

@@ -1,0 +1,40 @@
+name: Shadow worker
+
+# Paper/shadow only. Never calls /api/scalp and never touches the main bot.
+# Requires one repository secret: SHADOW_URL = full URL of /api/shadow
+# (e.g. https://<your-host>/api/shadow). If it is missing, the job skips safely.
+# Optional secret: SHADOW_CRON_SECRET, sent as a Bearer token when configured.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shadow-worker
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call the isolated /api/shadow endpoint
+        env:
+          SHADOW_URL: ${{ secrets.SHADOW_URL }}
+          SHADOW_CRON_SECRET: ${{ secrets.SHADOW_CRON_SECRET }}
+        run: |
+          if [ -z "$SHADOW_URL" ]; then
+            echo "SHADOW_URL secret is not set; nothing to do."
+            exit 0
+          fi
+          if [ -n "$SHADOW_CRON_SECRET" ]; then
+            response=$(curl --fail --silent --show-error --max-time 150 \
+              -H "Authorization: Bearer $SHADOW_CRON_SECRET" "$SHADOW_URL")
+          else
+            response=$(curl --fail --silent --show-error --max-time 150 "$SHADOW_URL")
+          fi
+          echo "$response"
