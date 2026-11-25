@@ -5,8 +5,9 @@ name: Shadow worker
 # Optional secrets:
 #   SHADOW_CRON_SECRET   -> sent as Authorization: Bearer when CRON_SECRET is set on Vercel
 #   VERCEL_BYPASS_TOKEN  -> sent as x-vercel-protection-bypass when Deployment Protection is on
-# Primary scheduler is Vercel Cron (vercel.json, every 5 minutes, Pro plan).
-# This workflow is a fallback: it skips unless VERCEL_BYPASS_TOKEN is set.
+# Primary scheduler on Hobby: GitHub Actions every 5 minutes.
+# Vercel Hobby cannot run */5 cron jobs. The production alias is public,
+# so no VERCEL_BYPASS_TOKEN is needed; if you add one, it will be sent.
 
 on:
   schedule:
@@ -27,15 +28,11 @@ jobs:
     steps:
       - name: Call the isolated /api/shadow endpoint
         env:
-          SHADOW_URL: ${{ secrets.SHADOW_URL || 'https://superauto5-gdi0bngt4-youssef-mansour854s-projects.vercel.app/api/shadow' }}
+          SHADOW_URL: ${{ secrets.SHADOW_URL || 'https://superauto5.vercel.app/api/shadow' }}
           SHADOW_CRON_SECRET: ${{ secrets.SHADOW_CRON_SECRET }}
           VERCEL_BYPASS_TOKEN: ${{ secrets.VERCEL_BYPASS_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${VERCEL_BYPASS_TOKEN:-}" ]; then
-            echo "VERCEL_BYPASS_TOKEN not set; local ShadowWorker task is the active scheduler. Skipping."
-            exit 0
-          fi
           headers=()
           if [ -n "${SHADOW_CRON_SECRET:-}" ]; then
             headers+=(-H "Authorization: Bearer $SHADOW_CRON_SECRET")
