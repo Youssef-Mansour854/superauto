@@ -5,8 +5,8 @@ name: Shadow worker
 # Optional secrets:
 #   SHADOW_CRON_SECRET   -> sent as Authorization: Bearer when CRON_SECRET is set on Vercel
 #   VERCEL_BYPASS_TOKEN  -> sent as x-vercel-protection-bypass when Deployment Protection is on
-# Without VERCEL_BYPASS_TOKEN the job skips: the active scheduler is the local
-# Windows task ShadowWorker (scripts/shadow_worker.bat, every 5 minutes).
+# Primary scheduler is Vercel Cron (vercel.json, every 5 minutes, Pro plan).
+# This workflow is a fallback: it skips unless VERCEL_BYPASS_TOKEN is set.
 
 on:
   schedule:

@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/shadow",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
